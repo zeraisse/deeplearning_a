@@ -1,0 +1,36 @@
+# --- Environnement & Système ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Deep Learning (Gros Fichiers) ---
+# Modèles & Checkpoints (on ne commit jamais ça)
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.safetensors
+
+# Logs & Monitoring
+runs/
+logs/
+wandb/
+*.log
+
+# --- Data ---
+# On ignore les dossiers de données pour ne pas saturer Git
+data/
+datasets/
+dataset/
+images/
+output/
+results/
+
+# --- Spécifique Windows/Python ---
+$RECYCLE.BIN/
+*.spec

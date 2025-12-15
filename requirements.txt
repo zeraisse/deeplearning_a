@@ -1,0 +1,23 @@
+# --- Source prioritaire pour PyTorch Nightly (ton fix RTX 5070 Ti) ---
+--extra-index-url https://download.pytorch.org/whl/nightly/cu126
+
+# --- Le Core Deep Learning ---
+torch
+torchvision
+torchaudio
+
+# --- Data Science (Maintenant accessibles via PyPI standard) ---
+numpy
+pandas
+scipy
+scikit-learn
+
+# --- Outils Visuels & Utils ---
+matplotlib
+seaborn
+tqdm
+rich
+tensorboard
+opencv-python
+pillow
+albumentations
