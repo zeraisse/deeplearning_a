@@ -36,3 +36,4 @@ $RECYCLE.BIN/
 *.spec
 
 dp_training2/ffhq_dataset/
+dp_training1/videos/
