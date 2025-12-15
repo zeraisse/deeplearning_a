@@ -12,7 +12,7 @@ CHECKPOINT_DIR = "checkpoints"
 VIDEO_FOLDER = "videos"   # Dossier où la vidéo sera sauvegardée
 
 def load_latest_checkpoint(agent):
-    checkpoints = sorted(glob.glob(f"{CHECKPOINT_DIR}/*.pth"))
+    checkpoints = sorted(glob.glob(f"{CHECKPOINT_DIR}/ckpt_ep_450.pth"))
     if not checkpoints:
         print("❌ Aucun checkpoint trouvé !")
         return None, 0
