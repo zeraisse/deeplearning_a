@@ -34,3 +34,5 @@ results/
 # --- Spécifique Windows/Python ---
 $RECYCLE.BIN/
 *.spec
+
+dp_training2/ffhq_dataset/

@@ -21,3 +21,8 @@ tensorboard
 opencv-python
 pillow
 albumentations
+
+# gymnasium
+gymnasium[atari]
+gymnasium[accept-rom-license]
+shimmy>=1.0.0
