@@ -5,53 +5,58 @@ import os
 
 # --- CONFIGURATION ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 image_size = 64
 channels = 3
 timestamps = 1000
-model_path = "ddpm_ffhq_final.pth" # Ou "ddpm_ffhq_ep10.pth" si tu veux tester en cours de route
+
+# 👇 MODIFIE CECI avec le dernier fichier .pth qui existe dans ton dossier !
+model_path = "ddpm_ffhq_final.pth"
 
 # --- 1. CHARGER LE MODÈLE ---
+print(f"Chargement sur {device}...")
 model = deepinv.models.DiffUNet(in_channels=channels, out_channels=channels, pretrained=None).to(device)
 
 try:
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # map_location est important si tu as sauvé sur GPU et que tu charges sur CPU
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.eval()
-    print(f"✅ Modèle {model_path} chargé !")
+    print(f"Modèle {model_path} chargé !")
 except FileNotFoundError:
-    print(f"❌ Pas de fichier {model_path}. Lance l'entraînement d'abord !")
+    print(f"Le fichier {model_path} n'existe pas encore.")
+    print("Regarde dans ton dossier et change la variable 'model_path' avec un fichier 'epX.pth' existant.")
     exit()
 
-# --- 2. PARAMÈTRES MATHÉMATIQUES (IDENTIQUES AU TRAIN) ---
-# Il est CRUCIAL d'avoir exactement les mêmes betas
+# --- 2. PARAMÈTRES MATHÉMATIQUES ---
 beta_start = 1e-4
 beta_end = 0.02
 betas = torch.linspace(beta_start, beta_end, timestamps).to(device)
 alphas = 1.0 - betas
 alphas_cumprod = torch.cumprod(alphas, dim=0)
-# Calculs pour le processus inverse (Reverse Diffusion)
 sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
 sqrt_inv_alphas = torch.sqrt(1.0 / alphas)
-posterior_variance = betas * (1.0 - torch.cat([torch.tensor([1.0]).to(device), alphas_cumprod[:-1]])) / (1.0 - alphas_cumprod)
 
-# --- 3. GÉNÉRATION (REVERSE PROCESS) ---
+# --- 3. GÉNÉRATION ---
 def sample(num_images=16):
-    print(f"🎨 Génération de {num_images} visages...")
+    print(f"Génération de {num_images} visages en cours...")
     
-    # Étape 1 : On part du bruit pur (Pure Noise)
     x = torch.randn(num_images, channels, image_size, image_size).to(device)
     
-    # Étape 2 : La boucle inverse (De 1000 à 0)
-    # C'est là que la magie opère : on "sculpte" le bruit
     with torch.no_grad():
         for i in range(timestamps - 1, -1, -1):
             t = torch.tensor([i] * num_images, device=device)
             
-            # Le modèle prédit le bruit à enlever
-            predicted_noise = model(x, t, type_t='timestep')
+            # Prédiction du modèle
+            output = model(x, t, type_t='timestep')
             
-            # Formule mathématique du DDPM (ne t'inquiète pas, c'est la formule standard)
-            # x_{t-1} = 1/sqrt(alpha) * (x_t - (1-alpha)/sqrt(1-alpha_bar) * epsilon) + sigma * z
-            
+            # --- CORRECTION CRITIQUE (Comme dans train.py) ---
+            # Si le modèle sort 6 canaux (bruit + variance), on ne garde que les 3 premiers
+            if output.shape[1] == 2 * channels:
+                predicted_noise, _ = torch.split(output, channels, dim=1)
+            else:
+                predicted_noise = output
+            # -------------------------------------------------
+
             beta_t = betas[i]
             sqrt_one_minus_alpha_cumprod_t = sqrt_one_minus_alphas_cumprod[i]
             sqrt_inv_alpha_t = sqrt_inv_alphas[i]
@@ -59,19 +64,19 @@ def sample(num_images=16):
             if i > 0:
                 noise = torch.randn_like(x)
             else:
-                noise = torch.zeros_like(x) # Pas de bruit à la toute dernière étape
+                noise = torch.zeros_like(x)
             
             x = sqrt_inv_alpha_t * (x - (beta_t / sqrt_one_minus_alpha_cumprod_t) * predicted_noise)
-            x += torch.sqrt(beta_t) * noise # On rajoute un petit peu d'aléatoire (Langevin dynamics)
+            x += torch.sqrt(beta_t) * noise
             
             if i % 100 == 0:
-                print(f"⏳ Denoising step {i}/{timestamps}...")
+                print(f"Step {i}/{timestamps}...")
 
-    # Étape 3 : On remet les pixels entre 0 et 1 pour l'affichage
     x = (x + 1) / 2.0
     return x
 
 # --- 4. SAUVEGARDE ---
-images = sample(num_images=16)
-save_image(images, "resultat_generation.png", nrow=4)
-print("✨ Image générée : resultat_generation.png")
+images = sample(num_images=64) 
+save_name = f"gen_{model_path.replace('.pth', '')}.png"
+save_image(images, save_name, nrow=8)
+print(f"Image générée : {save_name}")
