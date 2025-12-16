@@ -1,5 +1,7 @@
 import tensorflow as tf
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from tensorflow.keras.layers import Dense, LayerNormalization, Dropout, Embedding, MultiHeadAttention, GlobalAveragePooling1D
 from tensorflow.keras.preprocessing.sequence import pad_sequences
