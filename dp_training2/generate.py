@@ -2,6 +2,7 @@ import torch
 import deepinv
 from torchvision.utils import save_image
 import os
+import glob
 
 # --- CONFIGURATION ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -11,7 +12,7 @@ channels = 3
 timestamps = 1000
 
 # 👇 MODIFIE CECI avec le dernier fichier .pth qui existe dans ton dossier !
-model_path = "ddpm_ffhq_final.pth"
+model_path = "ddpm_ffhq_ep70.pth"
 
 # --- 1. CHARGER LE MODÈLE ---
 print(f"Chargement sur {device}...")
