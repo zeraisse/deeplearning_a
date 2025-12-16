@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings("ignore")
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,12 +10,11 @@ import math
 from tqdm import tqdm
 from model import TransformerModel, MAX_LEN, VOCAB_SIZE, BATCH_SIZE, LEARNING_RATE, EPOCHS
 
-# --- CONFIGURATION ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Utilisation du périphérique : {DEVICE}")
 
+best_loss = float('inf')
 
-# --- 1. TOKENIZER & DATA ---
 print("Chargement Tokenizer & Data...")
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 ds_train = load_dataset("rajpurkar/squad", split='train') 
@@ -33,22 +34,17 @@ class SquadDataset(Dataset):
         question = item['question']
         answer = item['answers']['text'][0]
         
-        # Input: Question + Context
         input_text = f"{question} [SEP] {context}"
         enc_tokens = self.tokenizer(input_text, max_length=MAX_LEN, padding="max_length", truncation=True, return_tensors="pt")
         
-        # Target: Answer
-        ans_tokens = self.tokenizer(answer, max_length=MAX_LEN, padding="max_length", truncation=True, return_tensors="pt")
+        ans_tokens = self.tokenizer(answer, max_length=MAX_LEN + 1, padding="max_length", truncation=True, return_tensors="pt")
         
         src_ids = enc_tokens['input_ids'].squeeze(0)
-        tgt_ids = ans_tokens['input_ids'].squeeze(0)
+        ans_ids = ans_tokens['input_ids'].squeeze(0)
         
-        # On shift les labels (Teacher Forcing manuel)
-        # Note: BERT tokenizer gère déjà CLS/SEP, on simplifie ici pour l'exemple
-        dec_input = tgt_ids.clone() # Input du decoder
-        label = tgt_ids.clone()     # Ce qu'on doit prédire
+        dec_input = ans_ids[:-1].clone()
+        label = ans_ids[1:].clone()
         
-        # On remplace le padding par -100 pour que la Loss l'ignore (Standard PyTorch)
         label[label == 0] = -100
         
         return src_ids, dec_input, label
@@ -59,20 +55,16 @@ val_dataset = SquadDataset(ds_val)
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
 
-
-
-# --- 3. ENTRAÎNEMENT ---
 model = TransformerModel().to(DEVICE)
 optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-criterion = nn.CrossEntropyLoss(ignore_index=-100) # Ignore le padding
+criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
-print("🔥 Démarrage de l'entraînement PyTorch...")
+print("Démarrage de l'entraînement PyTorch...")
 
 for epoch in range(EPOCHS):
     model.train()
     total_loss = 0
     
-    # Barre de progression
     progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
     
     for src, tgt_in, tgt_out in progress_bar:
@@ -80,10 +72,8 @@ for epoch in range(EPOCHS):
         
         optimizer.zero_grad()
         
-        # Le décodeur prend la réponse décalée
         output = model(src, tgt_in)
         
-        # Reshape pour la Loss : [Batch * Seq, Vocab]
         output = output.reshape(-1, VOCAB_SIZE)
         tgt_out = tgt_out.reshape(-1)
         
@@ -96,8 +86,13 @@ for epoch in range(EPOCHS):
         
     avg_loss = total_loss / len(train_loader)
     print(f"Epoch {epoch+1} terminée. Loss moyenne: {avg_loss:.4f}")
+    # On écrase le fichier SEULEMENT si le modèle est meilleur qu'avant
+    if avg_loss < best_loss:
+        best_loss = avg_loss
+        torch.save(model.state_dict(), "squad_pytorch_model.pth")
+        print(f"Nouveau record ! Modèle sauvegardé (Loss: {best_loss:.4f})")
+    else:
+        print(f"Pas d'amélioration (Best: {best_loss:.4f})")
     
-    # Sauvegarde
-    torch.save(model.state_dict(), "squad_pytorch_model.pth")
 
-print("Modèle sauvegardé : squad_pytorch_model.pth")
+print("Done")

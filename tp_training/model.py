@@ -6,12 +6,12 @@ import math
 MAX_LEN = 128
 VOCAB_SIZE = 30522
 EMBED_DIM = 256
-NUM_HEADS = 4
+NUM_HEADS = 8
 FF_DIM = 1024
-NUM_LAYERS = 2
+NUM_LAYERS = 6
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
-EPOCHS = 10
+EPOCHS = 50
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
