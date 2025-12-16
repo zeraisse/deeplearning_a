@@ -138,16 +138,41 @@ model.compile(optimizer="adam",
 history = model.fit(
     x_train, y_train, 
     batch_size=batch_size, 
-    epochs=15,
+    epochs=10,
     validation_data=(x_val, y_val)
 )
 
-pd.DataFrame(history.history).plot(figsize=(8, 5))
-plt.title("Courbes d'entraînement")
-plt.xlabel("Époque")
-plt.ylabel("Valeur")
+# --- VISUALISATION & SAUVEGARDE PNG ---
+print("📊 Génération du graphique PNG...")
+
+plt.figure(figsize=(12, 5))
+
+# Graphique 1 : La Précision (Accuracy)
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy')
+plt.plot(history.history['val_accuracy'], label='Val Accuracy')
+plt.title('Précision (Plus haut = Mieux)')
+plt.xlabel('Époque')
+plt.ylabel('Accuracy')
+plt.legend()
 plt.grid(True)
-plt.show()
+
+# Graphique 2 : La Perte (Loss)
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Val Loss')
+plt.title('Perte / Loss (Plus bas = Mieux)')
+plt.xlabel('Époque')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+
+plt.savefig("courbes_entrainement.png", dpi=300) 
+
+print("✅ Image 'courbes_entrainement.png' générée avec succès !")
+# plt.show() # voir l'image apparaître à l'écran
 
 # Sauvegarde au format moderne .keras
 print("💾 Sauvegarde...")
