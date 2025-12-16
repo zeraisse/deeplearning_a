@@ -1,84 +1,66 @@
-import tensorflow as tf
+import torch
 from transformers import AutoTokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-import numpy as np
+from model import TransformerModel, MAX_LEN
 
-# --- CONFIGURATION (Doit être identique à l'entraînement) ---
-maxlen = 128
-model_path = "squad_model_best.keras"
-
-# --- RE-DEFINITION DES CLASSES (Nécessaire pour le chargement) ---
-# Copie-colle EXACTEMENT les mêmes classes PositionalEmbedding, TransformerEncoderBlock, TransformerDecoderBlock ici
-# (Pour alléger la réponse, je te laisse recopier les 3 classes du fichier train_qa.py ici)
-# ... [INSÉRER LES CLASSES ICI] ...
-
-# Si tu ne veux pas recopier, tu peux mettre les classes dans un fichier `models.py` et faire `from models import ...`
-# Mais pour faire simple, recolle les classes PositionalEmbedding, TransformerEncoderBlock, TransformerDecoderBlock juste là.
+# --- CONFIGURATION ---
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MODEL_PATH = "squad_pytorch_model.pth"
 
 # --- CHARGEMENT ---
-print("📥 Chargement du Tokenizer et du Modèle...")
+print("📥 Chargement du Tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
-# Dictionnaire des objets custom pour Keras
-custom_objects = {
-    "PositionalEmbedding": PositionalEmbedding,
-    "TransformerEncoderBlock": TransformerEncoderBlock,
-    "TransformerDecoderBlock": TransformerDecoderBlock
-}
+print(f"📥 Chargement du Modèle depuis {MODEL_PATH}...")
+model = TransformerModel().to(DEVICE)
 
-model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-print("✅ Modèle chargé !")
+try:
+    # On charge les poids
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    model.eval()
+    print("✅ Modèle chargé et prêt !")
+except FileNotFoundError:
+    print(f"Erreur : Le fichier {MODEL_PATH} est introuvable.")
+    exit()
 
+# --- GÉNÉRATION ---
 def generate_answer(question, context):
-    # 1. Préparer l'entrée (Encoder)
     input_text = f"{question} [SEP] {context}"
-    tokenized_in = tokenizer(input_text, max_length=maxlen, padding='max_length', truncation=True)
-    encoder_input = np.array([tokenized_in['input_ids']])
+    enc_tokens = tokenizer(input_text, max_length=MAX_LEN, padding="max_length", truncation=True, return_tensors="pt")
+    src = enc_tokens['input_ids'].to(DEVICE)
     
-    # 2. Initialiser le Décodeur avec le token de départ [CLS] (ID 101 pour BERT)
-    # On crée une séquence vide remplie de padding
-    decoder_input = np.zeros((1, maxlen), dtype="int32")
-    decoder_input[0, 0] = 101 # Start Token
-    
-    # 3. Boucle de génération mot par mot
-    for i in range(maxlen - 1):
-        # On prédit
-        predictions = model.predict([encoder_input, decoder_input], verbose=0)
-        
-        # On regarde quelle est la prédiction pour le token actuel (i)
-        # predictions shape: (1, 128, 30522)
-        predicted_id = np.argmax(predictions[0, i, :])
-        
-        # Si le modèle prédit [SEP] (102), c'est fini
-        if predicted_id == 102:
-            break
-            
-        # Sinon, on ajoute le mot à l'entrée du décodeur pour le tour suivant
-        decoder_input[0, i+1] = predicted_id
+    tgt_input = torch.tensor([[101]], device=DEVICE) # [CLS]
 
-    # 4. Décoder les IDs en texte
-    # On récupère tous les tokens générés (en ignorant les 0 du début qui n'ont pas été remplis)
-    generated_ids = [id for id in decoder_input[0] if id not in [0, 101, 102]]
+    with torch.no_grad():
+        for _ in range(MAX_LEN):
+            # Le modèle gère le masque et le device automatiquement (voir model.py)
+            output = model(src, tgt_input)
+            
+            next_token_logits = output[:, -1, :] 
+            next_token_id = next_token_logits.argmax(dim=-1).unsqueeze(0)
+            
+            if next_token_id.item() == 102: # [SEP]
+                break
+            
+            tgt_input = torch.cat([tgt_input, next_token_id], dim=1)
+
+    generated_ids = tgt_input[0, 1:] 
     return tokenizer.decode(generated_ids, skip_special_tokens=True)
 
-# --- INTERFACE ---
 print("\n" + "="*50)
-print("🤖 ORACLE SQuAD - Pose tes questions sur un texte")
 print("="*50)
 
 while True:
     print("\n--- NOUVEAU CONTEXTE ---")
-    context = input("📜 Copie-colle ton texte/paragraphe ici : ")
-    if not context: continue
+    context = input("Texte : ")
+    if not context.strip(): continue
+    if context.lower() in ['exit', 'quit']: break
     
     while True:
-        question = input("\n❓ Ta question (ou 'new' pour changer de texte) : ")
+        question = input("\nQuestion : ")
         if question.lower() == 'new': break
         if question.lower() in ['exit', 'quit']: exit()
         
-        print("🤔 Réflexion en cours...")
         try:
-            answer = generate_answer(question, context)
-            print(f"💡 Réponse : {answer}")
+            print(f"💡 Réponse : {generate_answer(question, context)}")
         except Exception as e:
-            print(f"❌ Erreur : {e}")
+            print(f"Erreur : {e}")
