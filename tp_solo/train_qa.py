@@ -1,12 +1,6 @@
 import os
 import warnings
 import glob
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 0=Tout, 1=Info, 2=Warning, 3=Error
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-warnings.filterwarnings("ignore", message="triton not found")
-warnings.filterwarnings("ignore", category=UserWarning)
-
-warnings.filterwarnings("ignore")
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -14,17 +8,27 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
 from datasets import load_dataset
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
-
-# On importe l'architecture depuis model.py
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
+from pytorch_lightning.loggers import CSVLogger
 from model import TransformerModel, MAX_LEN, VOCAB_SIZE, BATCH_SIZE, LEARNING_RATE, EPOCHS
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+warnings.filterwarnings("ignore")
 
-# --- 1. PRÉPARATION DES DONNÉES ---
-print("📥 Chargement du Tokenizer et des Données...")
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-ds_train = load_dataset("rajpurkar/squad", split='train') 
-ds_val = load_dataset("rajpurkar/squad", split='validation')
+
+# --- 1. PRÉPARATION DES DONNÉES (MODIFIÉ POUR 90% / 10%) ---
+full_dataset = load_dataset("rajpurkar/squad", split="train+validation")
+
+# On coupe : 10% pour le test (validation), le reste (90%) pour l'entrainement
+# seed=42 permet d'avoir toujours le même découpage si tu relances
+split_data = full_dataset.train_test_split(test_size=0.1, seed=42)
+
+ds_train = split_data['train']
+ds_val = split_data['test']
+
+print(f"📊 Données préparées : {len(ds_train)} entraînement (90%) / {len(ds_val)} validation (10%)")
 
 class SquadDataset(Dataset):
     def __init__(self, data, tokenizer):
@@ -39,36 +43,75 @@ class SquadDataset(Dataset):
         context = item['context']
         question = item['question']
         try:
+            # On prend la première réponse disponible
             answer = item['answers']['text'][0]
         except IndexError:
-            answer = "" # Gestion des cas rares sans réponse
+            answer = ""
         
-        # Encodage Encodeur : Question + Contexte
         input_text = f"{question} [SEP] {context}"
         enc_tokens = self.tokenizer(input_text, max_length=MAX_LEN, padding="max_length", truncation=True, return_tensors="pt")
         
-        # Encodage Décodeur : Réponse
         ans_tokens = self.tokenizer(answer, max_length=MAX_LEN + 1, padding="max_length", truncation=True, return_tensors="pt")
         
         src_ids = enc_tokens['input_ids'].squeeze(0)
         ans_ids = ans_tokens['input_ids'].squeeze(0)
         
-        # Décalage pour le Teacher Forcing
-        dec_input = ans_ids[:-1].clone() # Entrée : [START, mot1, mot2]
-        label = ans_ids[1:].clone()      # Sortie attendue : [mot1, mot2, END]
+        dec_input = ans_ids[:-1].clone()
+        label = ans_ids[1:].clone()
         
-        # On remplace les 0 (padding) par -100 pour que la Loss les ignore
-        label[label == 0] = -100 
+        label[label == 0] = -100
         
         return src_ids, dec_input, label
 
-# --- 2. LE MODULE LIGHTNING (Le Cerveau) ---
+class PredictionLogger(Callback):
+    def __init__(self, tokenizer, num_samples=2, log_file="training_logs.txt"):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.num_samples = num_samples
+        self.log_file = log_file
+        
+        # On vide le fichier au démarrage
+        with open(self.log_file, "w", encoding="utf-8") as f:
+            f.write("=== LOGS D'ENTRAÎNEMENT ===\n")
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        if batch_idx != 0: return
+
+        src, tgt_in, tgt_out = batch
+        
+        with torch.no_grad():
+            logits = pl_module(src, tgt_in)
+            preds = torch.argmax(logits, dim=-1)
+
+        # On ouvre le fichier en mode "append" (ajout)
+        with open(self.log_file, "a", encoding="utf-8") as f:
+            header = f"\n--- EPOCH {trainer.current_epoch} ---\n"
+            print(header) # Affichage Terminal
+            f.write(header)
+            
+            for i in range(min(self.num_samples, src.size(0))):
+                src_text = self.tokenizer.decode(src[i], skip_special_tokens=True)[:100]
+                
+                truth_ids = tgt_out[i].cpu().numpy()
+                truth_text = self.tokenizer.decode(truth_ids[truth_ids != -100], skip_special_tokens=True)
+                
+                pred_text = self.tokenizer.decode(preds[i], skip_special_tokens=True)
+
+                # Formatage du message
+                msg = (f"Q:    {src_text}...\n"
+                       f"Ref:  {truth_text}\n"
+                       f"Pred: {pred_text}\n"
+                       f"{'-'*20}\n")
+                
+                print(msg) # Affichage Terminal
+                f.write(msg) # Ecriture Fichier
+
 class SquadLightningModule(pl.LightningModule):
     def __init__(self):
         super().__init__()
-        self.model = TransformerModel() # Appelle ton architecture model.py
+        self.model = TransformerModel()
         self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
-        self.save_hyperparameters() # Sauvegarde la config
+        self.save_hyperparameters()
 
     def forward(self, src, tgt):
         return self.model(src, tgt)
@@ -77,15 +120,11 @@ class SquadLightningModule(pl.LightningModule):
         src, tgt_in, tgt_out = batch
         output = self(src, tgt_in)
         
-        # Aplatir les dimensions pour la Loss
-        # Output: (Batch * Seq_Len, Vocab_Size)
         output = output.reshape(-1, VOCAB_SIZE)
-        # Target: (Batch * Seq_Len)
         tgt_out = tgt_out.reshape(-1)
         
         loss = self.criterion(output, tgt_out)
         
-        # Logs pour voir la progression en direct
         self.log("train_loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         return loss
 
@@ -101,63 +140,57 @@ class SquadLightningModule(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        # AdamW est souvent meilleur pour les Transformers que Adam classique
         return optim.AdamW(self.parameters(), lr=LEARNING_RATE)
 
-# --- 3. LANCEMENT ---
+    def on_before_optimizer_step(self, optimizer):
+        total_norm = 0.0
+        for p in self.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** 0.5
+        
+        self.log("grad_norm", total_norm, prog_bar=True)
+
 if __name__ == '__main__':
-    # Initialisation des Datasets
+    # Initialisation des datasets avec les variables définies plus haut
     train_dataset = SquadDataset(ds_train, tokenizer)
     val_dataset = SquadDataset(ds_val, tokenizer)
-
-    # DataLoaders (Optimisés pour Windows: num_workers=0 évite les bugs, monte à 2 ou 4 si Linux)
+    
+    logger = CSVLogger("logs_csv", name="squad_history")
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, num_workers=0)
 
-    # CALLBACKS
     checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints",
         filename="squad-transformer-{epoch:02d}-{val_loss:.2f}",
         save_top_k=1,
         monitor="val_loss",
-        mode="min",
-        verbose=True
+        mode="min"
     )
-    # Pour le moment pas d'early stopping
-    # early_stopping = EarlyStopping(
-    #     monitor="val_loss",
-    #     patience=50,
-    #     verbose=True,
-    #     mode="min"
-    # )
     
     lr_monitor = LearningRateMonitor(logging_interval='step')
+    pred_logger = PredictionLogger(tokenizer=tokenizer)
 
-    # LE TRAINER (Configuration RTX 5070 Ti)
-    print("Démarrage de l'entraînement PyTorch Lightning...")
-    
-    # Activation du Float32 Matmul Precision pour cartes NVIDIA récentes (série 30/40/50)
     torch.set_float32_matmul_precision('medium')
 
     trainer = pl.Trainer(
-        max_epochs=EPOCHS ,                  # Le EarlyStopping coupera avant si besoin
+        max_epochs=EPOCHS,
         accelerator="gpu",
         devices=1,
-        precision="16-mixed",           # INDISPENSABLE pour 16 layers (économise la VRAM)
-        accumulate_grad_batches=4,      # Astuce : Simule un batch 4x plus grand
-        callbacks=[checkpoint_callback, lr_monitor],
-        log_every_n_steps=50
+        precision="16-mixed",
+        accumulate_grad_batches=4,
+        logger=logger,
+        callbacks=[checkpoint_callback, lr_monitor, pred_logger], 
+        log_every_n_steps=10,
+        profiler="simple"
     )
+
     list_of_checkpoints = glob.glob('checkpoints/*.ckpt')
     if list_of_checkpoints:
         latest_checkpoint = max(list_of_checkpoints, key=os.path.getctime)
-        print(f"Reprise de l'entraînement depuis le checkpoint {latest_checkpoint}...")
         model_lightning = SquadLightningModule.load_from_checkpoint(latest_checkpoint)
     else:
-        # Création du modèle
         model_lightning = SquadLightningModule()
 
-    # C'est parti !
     trainer.fit(model_lightning, train_loader, val_loader)
-
-    print(f"Terminé ! Meilleur modèle : {checkpoint_callback.best_model_path}")
