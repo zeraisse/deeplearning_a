@@ -10,7 +10,7 @@ NUM_HEADS = 8
 FF_DIM = 1024
 NUM_LAYERS = 16
 BATCH_SIZE = 32
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-5
 EPOCHS = 100
 
 class PositionalEncoding(nn.Module):

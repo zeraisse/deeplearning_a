@@ -1,6 +1,12 @@
+import os
 import warnings
-warnings.filterwarnings("ignore")
+import glob
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 0=Tout, 1=Info, 2=Warning, 3=Error
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+warnings.filterwarnings("ignore", message="triton not found")
+warnings.filterwarnings("ignore", category=UserWarning)
 
+warnings.filterwarnings("ignore")
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -12,6 +18,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, Learning
 
 # On importe l'architecture depuis model.py
 from model import TransformerModel, MAX_LEN, VOCAB_SIZE, BATCH_SIZE, LEARNING_RATE, EPOCHS
+
 
 # --- 1. PRÉPARATION DES DONNÉES ---
 print("📥 Chargement du Tokenizer et des Données...")
@@ -116,13 +123,13 @@ if __name__ == '__main__':
         mode="min",
         verbose=True
     )
-
-    early_stopping = EarlyStopping(
-        monitor="val_loss",
-        patience=5,        # Arrête si pas d'amélioration pendant 5 époques
-        verbose=True,
-        mode="min"
-    )
+    # Pour le moment pas d'early stopping
+    # early_stopping = EarlyStopping(
+    #     monitor="val_loss",
+    #     patience=50,
+    #     verbose=True,
+    #     mode="min"
+    # )
     
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
@@ -138,12 +145,17 @@ if __name__ == '__main__':
         devices=1,
         precision="16-mixed",           # INDISPENSABLE pour 16 layers (économise la VRAM)
         accumulate_grad_batches=4,      # Astuce : Simule un batch 4x plus grand
-        callbacks=[checkpoint_callback, early_stopping, lr_monitor],
+        callbacks=[checkpoint_callback, lr_monitor],
         log_every_n_steps=50
     )
-
-    # Création du modèle
-    model_lightning = SquadLightningModule()
+    list_of_checkpoints = glob.glob('checkpoints/*.ckpt')
+    if list_of_checkpoints:
+        latest_checkpoint = max(list_of_checkpoints, key=os.path.getctime)
+        print(f"Reprise de l'entraînement depuis le checkpoint {latest_checkpoint}...")
+        model_lightning = SquadLightningModule.load_from_checkpoint(latest_checkpoint)
+    else:
+        # Création du modèle
+        model_lightning = SquadLightningModule()
 
     # C'est parti !
     trainer.fit(model_lightning, train_loader, val_loader)
