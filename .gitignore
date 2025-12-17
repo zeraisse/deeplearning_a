@@ -37,3 +37,5 @@ $RECYCLE.BIN/
 
 dp_training2/ffhq_dataset/
 dp_training1/videos/
+final_model/
+my_awesome_qa_model/

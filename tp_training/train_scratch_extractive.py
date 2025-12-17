@@ -6,6 +6,7 @@ from transformers import AutoTokenizer
 from datasets import load_dataset
 from tqdm import tqdm
 import math
+from model_scratch import ExtractiveTransformer, MAX_LEN
 
 # --- CONFIGURATION FROM SCRATCH ---
 # On reste raisonnable car on part de zéro
@@ -98,40 +99,7 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         return x + self.pe[:, :x.size(1)]
 
-class ExtractiveTransformer(nn.Module):
-    def __init__(self):
-        super().__init__()
-        # Initialisation aléatoire des Embeddings (From Scratch !)
-        self.embedding = nn.Embedding(VOCAB_SIZE, EMBED_DIM)
-        self.pos_encoder = PositionalEncoding(EMBED_DIM, MAX_LEN)
-        
-        # Uniquement l'Encodeur (Pas de décodeur = plus facile à apprendre)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=EMBED_DIM, nhead=NUM_HEADS, dim_feedforward=FF_DIM, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_LAYERS)
-        
-        # Tête de sortie : On veut 2 chiffres pour chaque mot (Probabilité Start, Probabilité End)
-        self.qa_outputs = nn.Linear(EMBED_DIM, 2)
 
-    def forward(self, input_ids, attention_mask=None):
-        # 1. Embedding
-        x = self.embedding(input_ids)
-        x = self.pos_encoder(x)
-        
-        # 2. Transformer (Encodeur)
-        # On inverse le masque d'attention pour PyTorch (True = ignorer)
-        src_key_padding_mask = (attention_mask == 0) if attention_mask is not None else None
-        
-        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-        
-        # 3. Prédiction (Batch, Seq_Len, 2)
-        logits = self.qa_outputs(x)
-        
-        # On sépare Start et End logits
-        start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1)
-        end_logits = end_logits.squeeze(-1)
-        
-        return start_logits, end_logits
 
 # --- 3. ENTRAÎNEMENT ---
 model = ExtractiveTransformer().to(DEVICE)
