@@ -2,8 +2,7 @@ import torch
 import glob
 import os
 from transformers import AutoTokenizer
-# On importe l'architecture définie dans model.py
-from model import TransformerModel, MAX_LEN, NUM_LAYERS
+from model import TransformerModel, MAX_LEN
 
 # --- CONFIGURATION ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
