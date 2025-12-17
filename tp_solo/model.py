@@ -3,15 +3,15 @@ import torch.nn as nn
 import math
 
 # --- HYPERPARAMÈTRES ---
-MAX_LEN = 128
+MAX_LEN = 512
 VOCAB_SIZE = 30522
 EMBED_DIM = 256
 NUM_HEADS = 8
-FF_DIM = 1024
-NUM_LAYERS = 16
+FF_DIM = 2048
+NUM_LAYERS = 6
 BATCH_SIZE = 32
-LEARNING_RATE = 1e-5
-EPOCHS = 100
+LEARNING_RATE = 2e-5
+EPOCHS = 30
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
