@@ -11,9 +11,9 @@ model = ExtractiveTransformer().to(DEVICE)
 try:
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
-    print("✅ Modèle Extractive Loaded!")
+    print("Modèle Extractive Loaded!")
 except:
-    print("❌ Fichier non trouvé.")
+    print("Fichier non trouvé.")
     exit()
 
 def get_answer(question, context):
@@ -45,9 +45,9 @@ def get_answer(question, context):
 
 # Chat Loop
 while True:
-    context = input("\n📜 Context: ")
+    context = input("\nContext: ")
     if not context: continue
-    question = input("❓ Question: ")
+    question = input("Question: ")
     
     try:
         print(f"💡 Réponse: {get_answer(question, context)}")

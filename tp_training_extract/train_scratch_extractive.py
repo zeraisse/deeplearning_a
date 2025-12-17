@@ -9,7 +9,6 @@ import math
 from model_scratch import ExtractiveTransformer, MAX_LEN
 
 # --- CONFIGURATION FROM SCRATCH ---
-# On reste raisonnable car on part de zéro
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MAX_LEN = 384       # Taille standard pour le QA
 VOCAB_SIZE = 30522  # Taille du vocabulaire BERT
@@ -18,7 +17,7 @@ NUM_HEADS = 8
 FF_DIM = 1024
 NUM_LAYERS = 6      # 6 couches d'Encodeur
 BATCH_SIZE = 32     # Ajuste selon ta VRAM (16 ou 32 sur 5070 Ti)
-EPOCHS = 20         # Il faudra du temps pour apprendre
+EPOCHS = 50         # Il faudra du temps pour apprendre
 LR = 3e-4           # Learning rate un peu plus élevé pour le scratch
 
 print(f"🔥 Mode: FROM SCRATCH (Extractive) sur {DEVICE}")
