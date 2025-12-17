@@ -2,14 +2,21 @@ import torch
 import torch.nn as nn
 import math
 
-# --- CONFIGURATION FROM SCRATCH ---
-MAX_LEN = 384
-VOCAB_SIZE = 30522
-EMBED_DIM = 256
-NUM_HEADS = 8
-FF_DIM = 1024
-NUM_LAYERS = 6
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Data & Tokenizer
+MAX_LEN = 384           # Taille max d'une séquence
+VOCAB_SIZE = 30522      # Taille vocabulaire BERT
+# Architecture Modèle
+EMBED_DIM = 256         # Largeur du modèle
+NUM_HEADS = 8           # Têtes d'attention
+FF_DIM = 1024           # Largeur interne FeedForward
+NUM_LAYERS = 8          # Profondeur (Augmenté à 8 pour plus d'intelligence)
+DROPOUT = 0.3           # Freinage fort pour éviter le "par cœur" (Overfitting)
+# Entraînement
+BATCH_SIZE = 32         # Si Erreur "OOM" (Out of Memory), passe à 16
+EPOCHS = 50             # Longue durée
+LR = 3e-4               # Learning Rate
+WEIGHT_DECAY = 0.01     # Régularisation supplémentaire
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
@@ -29,8 +36,15 @@ class ExtractiveTransformer(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(VOCAB_SIZE, EMBED_DIM)
         self.pos_encoder = PositionalEncoding(EMBED_DIM, MAX_LEN)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=EMBED_DIM, 
+            nhead=NUM_HEADS, 
+            dim_feedforward=FF_DIM, 
+            dropout=0.3, # <--- AUGMENTE ÇA (C'est le frein)
+            batch_first=True
+        )
         
-        encoder_layer = nn.TransformerEncoderLayer(d_model=EMBED_DIM, nhead=NUM_HEADS, dim_feedforward=FF_DIM, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_LAYERS)
         
         self.qa_outputs = nn.Linear(EMBED_DIM, 2)

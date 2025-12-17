@@ -1,6 +1,5 @@
 import torch
 from transformers import AutoTokenizer
-# IMPORTANT: On réutilise la classe définie dans le script d'entraînement
 from model_scratch import ExtractiveTransformer, MAX_LEN, VOCAB_SIZE, DEVICE
 
 # Chargement
