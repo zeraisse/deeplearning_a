@@ -1,8 +1,7 @@
 import torch
 from transformers import AutoTokenizer
 # IMPORTANT: On réutilise la classe définie dans le script d'entraînement
-# Idéalement, mets la classe ExtractiveTransformer dans model.py
-from train_scratch_extractive import ExtractiveTransformer, MAX_LEN, DEVICE
+from model_scratch import ExtractiveTransformer, MAX_LEN, VOCAB_SIZE, DEVICE
 
 # Chargement
 MODEL_PATH = "squad_scratch_extractive.pth"
