@@ -6,40 +6,40 @@ import torch
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ==============================================================================
-# PARAMETRES POUR gridEnv.py (L'Environnement)
+# PARAMETRES POUR gridEnv.py
 # ==============================================================================
-# Directions: 0:Right, 1:Down, 2:Left, 3:Up
 DIR_TO_VEC = [
-    (1, 0),
-    (0, 1),
-    (-1, 0),
-    (0, -1)
+    (1, 0), (0, 1), (-1, 0), (0, -1)
 ]
 
-GRID_SIZE = 8       # Taille de la grille (8x8)
-MAX_STEPS = 200     # Nombre max de pas avant game over
+GRID_SIZE = 12      # <--- 12x12 : C'est grand !
+MAX_STEPS = 400     # Plus de temps nécessaire
 
 # ==============================================================================
-# HYPERPARAMETERS POUR train.py (Le Modèle & L'Entraînement)
+# HYPERPARAMETERS POUR train.py
 # ==============================================================================
-# Architecture TRM
-INPUT_DIM = 3       # RGB (3 canaux)
-D_MODEL = 128       # Taille vecteur latent (augmenté pour Clé/Porte)
-NUM_HEADS = 4       # Attention heads
-# Actions: 0:left, 1:right, 2:fwd, 3:pickup, 4:drop, 5:toggle
-NUM_ACTIONS = 6     # <--- 6 Actions car on a ajouté Pickup/Toggle
-SEQ_LEN = 49        # Vue 7x7 pixels
-N_STEPS = 4         # Nombre de pas de réflexion (Recurrent steps)
+INPUT_DIM = 3       
+D_MODEL = 128       # Cerveau assez gros pour gérer Murs + Clé + Lave
+NUM_HEADS = 4       
+NUM_ACTIONS = 7    # 0:left, 1:right, 2:fwd, 3:pickup, 4:drop, 5:toggle
+SEQ_LEN = 49        # Toujours une vue locale 7x7
+N_STEPS = 4         # 4 cycles de réflexion
 
-# Entraînement
-BATCH_SIZE = 64
-LEARNING_RATE = 0.0005
-EPOCHS = 60
-EPISODES = 1500     # Taille du dataset
+BATCH_SIZE = 1024
+LEARNING_RATE = 0.001
+EPOCHS = 150         # Il faut du temps pour converger
+EPISODES = 20000     # Il faut BEAUCOUP d'exemples pour que l'expert montre comment éviter la lave
 
 # ==============================================================================
-# PARAMETRES POUR main.py (Affichage & Vidéo)
+# PARAMETRES POUR main.py
 # ==============================================================================
-VIDEO_FILENAME = "trm_result.mp4"
-VIDEO_FPS = 5
-MAX_VIDEO_STEPS = 60
+VIDEO_FILENAME = "trm_lava_result.mp4"
+VIDEO_FPS = 10      # Rapide
+MAX_VIDEO_STEPS = 200
+
+# ==============================================================================
+# PARAMETRES SAUVEGARDE (CHECKPOINT)
+# ==============================================================================
+CHECKPOINT_FILE = "checkpoint_last.pth"      # Pour reprendre en cas de crash
+BEST_MODEL_FILE = "best_model_weights.pth"   # Le meilleur modèle obtenu
+RESUME_TRAINING = True

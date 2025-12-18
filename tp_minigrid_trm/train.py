@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -13,7 +14,7 @@ from gridEnv import gridEnv, get_expert_action
 from config import (
     DEVICE, INPUT_DIM, D_MODEL, NUM_HEADS, NUM_ACTIONS, 
     SEQ_LEN, N_STEPS, BATCH_SIZE, LEARNING_RATE, EPOCHS, EPISODES,
-    GRID_SIZE
+    GRID_SIZE, CHECKPOINT_FILE, BEST_MODEL_FILE, RESUME_TRAINING
 )
 
 class TRMBlock(nn.Module):
@@ -117,21 +118,45 @@ def train_model(dataset, epochs=EPOCHS):
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.CrossEntropyLoss()
 
-    print(f"Start TRM Training on {DEVICE} | LR={LEARNING_RATE} | Epochs={epochs}")
+    print(f"Start TRM Training on {DEVICE} | Actions={NUM_ACTIONS}")
+    
+    # Variables d'état
+    start_epoch = 0
+    best_f1 = 0.0
     history = {'loss': [], 'acc': [], 'f1': []}
+
+    # --- 1. CHARGEMENT DU BACKUP (Si demandé et si existe) ---
+    if RESUME_TRAINING and os.path.exists(CHECKPOINT_FILE):
+        print(f"🔄 Checkpoint trouvé : '{CHECKPOINT_FILE}'. Reprise de l'entraînement...")
+        checkpoint = torch.load(CHECKPOINT_FILE)
+        
+        # On recharge tout
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1 # On reprend à l'époque suivante
+        best_f1 = checkpoint['best_f1']
+        history = checkpoint['history']
+        
+        print(f"   -> Reprise à l'époque {start_epoch + 1}/{epochs}. Best F1 actuel: {best_f1:.4f}")
+    else:
+        print("🚀 Nouvel entraînement démarré.")
+
     model.train()
     
-    for epoch in range(epochs):
+    # --- 2. BOUCLE D'ENTRAINEMENT ---
+    for epoch in range(start_epoch, epochs):
         total_loss = 0
         all_preds, all_labels = [], []
         
         for imgs, labels in loader:
             imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
             optimizer.zero_grad()
+            
             outputs = model(imgs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+            
             total_loss += loss.item()
             _, predicted = torch.max(outputs.data, 1)
             all_preds.extend(predicted.cpu().numpy())
@@ -147,5 +172,26 @@ def train_model(dataset, epochs=EPOCHS):
         
         print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss:.4f} | Acc: {epoch_acc:.2f}% | F1: {epoch_f1:.4f}")
         
+        # --- 3. SAUVEGARDE DU CHECKPOINT (Systématique) ---
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'best_f1': best_f1,
+            'history': history
+        }, CHECKPOINT_FILE)
+        
+        # --- 4. SAUVEGARDE DU MEILLEUR MODELE (Conditionnelle) ---
+        if epoch_f1 > best_f1:
+            best_f1 = epoch_f1
+            torch.save(model.state_dict(), BEST_MODEL_FILE)
+            print(f"   ★ Nouveau Record F1 ! Modèle sauvegardé dans '{BEST_MODEL_FILE}'")
+        
     plot_metrics(history)
+    
+    # A la fin, on charge les poids du MEILLEUR modèle (pas forcément le dernier) pour la vidéo
+    if os.path.exists(BEST_MODEL_FILE):
+        print("Chargement du meilleur modèle pour l'évaluation...")
+        model.load_state_dict(torch.load(BEST_MODEL_FILE))
+        
     return model

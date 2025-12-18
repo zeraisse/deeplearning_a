@@ -3,7 +3,8 @@ import collections
 from minigrid.minigrid_env import MiniGridEnv
 from minigrid.core.grid import Grid
 from minigrid.core.mission import MissionSpace
-from minigrid.core.world_object import Goal, Key, Door, Wall
+# AJOUT IMPORT LAVA
+from minigrid.core.world_object import Goal, Key, Door, Wall, Lava
 
 from config import DIR_TO_VEC, GRID_SIZE, MAX_STEPS
 
@@ -11,35 +12,40 @@ class gridEnv(MiniGridEnv):
     def __init__(self, size=GRID_SIZE, **kwargs):
         self.agent_start_pos = (1, 1)
         self.agent_start_dir = 0
-        mission_space = MissionSpace(mission_func=lambda: "get key, open door, go to goal")
+        mission_space = MissionSpace(mission_func=lambda: "avoid lava, get key, open door, go to goal")
         super().__init__(mission_space=mission_space, grid_size=size, max_steps=MAX_STEPS, **kwargs)
 
     def _gen_grid(self, width, height):
         self.grid = Grid(width, height)
         self.grid.wall_rect(0, 0, width, height)
         
-        # 1. Le Mur Vertical
+        # 1. Mur Vertical
         splitIdx = width // 2
         for i in range(0, height):
             self.grid.set(splitIdx, i, Wall())
         
-        # 2. La Porte Jaune
+        # 2. Porte Jaune
         doorIdx = height // 2
         self.grid.set(splitIdx, doorIdx, Door('yellow', is_locked=True))
         
-        # 3. Le Goal (À droite)
-        self.place_obj(Goal(), top=(splitIdx + 1, 0), size=(width - splitIdx - 1, height))
-        
-        # 4. L'Agent
+        # 3. Agent (Haut-Gauche)
         self.agent_pos = (1, 1)
         self.agent_dir = 0
         
-        # 5. La Clé (Tout en bas à gauche)
-        self.place_obj(Key('yellow'), top=(1, height - 3), size=(splitIdx - 1, 2))
+        # 4. Clé (Bas-Gauche)
+        self.place_obj(Key('yellow'), top=(1, height - 4), size=(splitIdx - 1, 3))
         
-        self.mission = "get key, open door, go to goal"
+        # 5. Goal (Droite)
+        self.place_obj(Goal(), top=(splitIdx + 1, 0), size=(width - splitIdx - 1, height))
+        
+        # --- 6. LE DANGER : LAVE ---
+        # On place 8 flaques de lave aléatoires dans la zone de droite (celle du but)
+        for _ in range(8):
+            self.place_obj(Lava(), top=(splitIdx + 1, 0), size=(width - splitIdx - 1, height))
+        
+        self.mission = "avoid lava, get key, open door, go to goal"
 
-# --- EXPERT INTELLIGENT ---
+# --- EXPERT INTELLIGENT (Avec évitement de Lave) ---
 def bfs_path(env, start_pos, start_dir, target_pos):
     queue = collections.deque([(start_pos[0], start_pos[1], start_dir, [])])
     visited = set([(start_pos[0], start_pos[1], start_dir)])
@@ -54,7 +60,6 @@ def bfs_path(env, start_pos, start_dir, target_pos):
         
         for action, name in possible_moves:
             nx, ny, nd = x, y, d
-            
             if action == 0: nd = (d - 1) % 4
             elif action == 1: nd = (d + 1) % 4
             elif action == 2:
@@ -64,10 +69,16 @@ def bfs_path(env, start_pos, start_dir, target_pos):
             if nx < 0 or nx >= env.width or ny < 0 or ny >= env.height: continue
 
             cell = env.grid.get(nx, ny)
-            is_obstacle = (cell is not None and cell.type == 'wall')
             
-            if cell and cell.type == 'door' and cell.is_locked:
-                if (nx, ny) != target_pos: is_obstacle = True
+            # --- DETECTION OBSTACLE ---
+            is_obstacle = False
+            if cell is not None:
+                # Mur OU Lave = Bloqué
+                if cell.type in ['wall', 'lava']: 
+                    is_obstacle = True
+                # Porte fermée = Bloqué (sauf si c'est la cible)
+                elif cell.type == 'door' and cell.is_locked:
+                    if (nx, ny) != target_pos: is_obstacle = True
 
             if not is_obstacle and (nx, ny, nd) not in visited:
                 visited.add((nx, ny, nd))
@@ -81,9 +92,7 @@ def get_expert_action(env):
     agent_dir = base_env.agent_dir
     carrying = base_env.carrying
     
-    key_pos = None
-    door_pos = None
-    goal_pos = None
+    key_pos, door_pos, goal_pos = None, None, None
     door_is_open = False
     
     for x in range(base_env.width):
@@ -96,15 +105,14 @@ def get_expert_action(env):
                     door_is_open = obj.is_open
                 elif obj.type == 'goal': goal_pos = (x, y)
 
-    target = None
-    action_at_target = None
+    target, action_at_target = None, None
     
     if not carrying:
-        target, action_at_target = key_pos, 3 # Pickup
+        target, action_at_target = key_pos, 3
     elif carrying and not door_is_open:
-        target, action_at_target = door_pos, 5 # Toggle
+        target, action_at_target = door_pos, 5
     else:
-        target, action_at_target = goal_pos, 2 # Walk
+        target, action_at_target = goal_pos, 2
 
     if not target: return base_env.action_space.sample()
 
