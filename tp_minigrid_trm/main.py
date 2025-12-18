@@ -1,26 +1,25 @@
 import torch
 import numpy as np
 import imageio
-import gymnasium as gym
-import minigrid
-from train import generate_dataset, train_model, DEVICE, ENV_ID
+# Import de TON env
+from gridEnv import gridEnv, GRID_SIZE
+from train import generate_dataset, train_model, DEVICE
 
-VIDEO_FILENAME = "trm_gym_result.mp4"
-VIDEO_FPS = 8  # Un peu plus rapide car 16x16 c'est grand
+VIDEO_FILENAME = "custom_env_result.mp4"
+VIDEO_FPS = 5
 
 def generate_video(model, filename=VIDEO_FILENAME):
-    print(f"Generating video for {ENV_ID}...")
-    env = gym.make(ENV_ID, render_mode="rgb_array")
+    print(f"Generating video for custom gridEnv (Size {GRID_SIZE})...")
+    env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
     writer = imageio.get_writer(filename, fps=VIDEO_FPS)
     
     obs, _ = env.reset()
     done = False
     
-    # Enregistrement première frame
     writer.append_data(env.render())
     
     step_count = 0
-    while not done and step_count < 200: # Max 200 steps pour éviter les fichiers énormes
+    while not done and step_count < 60:
         img = obs['image'].astype(np.float32) / 255.0
         img_tensor = torch.tensor(img).unsqueeze(0).to(DEVICE)
         
@@ -42,7 +41,7 @@ def generate_video(model, filename=VIDEO_FILENAME):
     print(f"Video saved to {filename}")
 
 if __name__ == "__main__":
-    # 1. Dataset Gymnasium
+    # 1. Dataset Custom
     dataset = generate_dataset()
     
     # 2. Entraînement
