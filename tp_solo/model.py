@@ -11,7 +11,7 @@ FF_DIM = 1024
 NUM_LAYERS = 6
 BATCH_SIZE = 32
 LEARNING_RATE = 2e-4
-EPOCHS = 30
+EPOCHS = 50
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):

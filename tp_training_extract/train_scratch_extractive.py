@@ -168,7 +168,7 @@ for epoch in range(EPOCHS):
                 el = e_logits[i]
                 
                 # --- BEAM SEARCH ICI ---
-                pred_s, pred_e = get_best_span(sl, el, n_best=5) # On regarde les 5 meilleures options
+                pred_s, pred_e = get_best_span(sl, el, n_best=3) # On regarde les 5 meilleures options
                 
                 # Calcul F1
                 f1 = calculate_f1(pred_s, pred_e, start_idx[i].item(), end_idx[i].item())

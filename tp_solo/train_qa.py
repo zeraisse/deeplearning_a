@@ -1,34 +1,262 @@
 import os
-import warnings
 import glob
+import math
+import collections
+import warnings
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import numpy as np
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
 from datasets import load_dataset
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, Callback
 from pytorch_lightning.loggers import CSVLogger
-from model import TransformerModel, MAX_LEN, VOCAB_SIZE, BATCH_SIZE, LEARNING_RATE, EPOCHS
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings("ignore")
 
-tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+# --- HYPERPARAMETERS ---
+MAX_LEN = 384
+VOCAB_SIZE = 30522
+EMBED_DIM = 256
+NUM_HEADS = 4
+FF_DIM = 1024
+NUM_LAYERS = 4
+BATCH_SIZE = 16
+LEARNING_RATE = 1e-4
+EPOCHS = 50
+BEAM_SIZE = 3
 
-# --- 1. PRÉPARATION DES DONNÉES (90% / 10%) ---
-print("📊 Chargement et découpage des données...")
-full_dataset = load_dataset("rajpurkar/squad", split="train+validation")
-split_data = full_dataset.train_test_split(test_size=0.1, seed=42)
-ds_train = split_data['train']
-ds_val = split_data['test']
-print(f"✅ Données : {len(ds_train)} Train / {len(ds_val)} Val")
+# --- UTILS: F1 SCORE ---
+def compute_f1(prediction, truth):
+    pred_tokens = prediction.split()
+    truth_tokens = truth.split()
+    
+    if len(pred_tokens) == 0 or len(truth_tokens) == 0:
+        return int(pred_tokens == truth_tokens)
+    
+    common_tokens = collections.Counter(pred_tokens) & collections.Counter(truth_tokens)
+    num_same = sum(common_tokens.values())
+    
+    if num_same == 0:
+        return 0
+    
+    precision = 1.0 * num_same / len(pred_tokens)
+    recall = 1.0 * num_same / len(truth_tokens)
+    
+    return (2 * precision * recall) / (precision + recall)
 
+# --- MODEL: TRANSFORMER + BEAM SEARCH ---
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
+
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1)]
+
+class TransformerModel(nn.Module):
+    def __init__(self):
+        super(TransformerModel, self).__init__()
+        self.embedding = nn.Embedding(VOCAB_SIZE, EMBED_DIM)
+        self.pos_encoder = PositionalEncoding(EMBED_DIM, MAX_LEN)
+        
+        self.transformer = nn.Transformer(
+            d_model=EMBED_DIM,
+            nhead=NUM_HEADS,
+            num_encoder_layers=NUM_LAYERS,
+            num_decoder_layers=NUM_LAYERS,
+            dim_feedforward=FF_DIM,
+            batch_first=True,
+            dropout=0.1
+        )
+        self.fc_out = nn.Linear(EMBED_DIM, VOCAB_SIZE)
+        
+    def forward(self, src, tgt):
+        src_emb = self.pos_encoder(self.embedding(src))
+        tgt_emb = self.pos_encoder(self.embedding(tgt))
+        
+        tgt_seq_len = tgt.size(1)
+        device = src.device
+        tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_seq_len).to(device)
+        
+        src_pad_mask = (src == 0)
+        tgt_pad_mask = (tgt == 0)
+
+        out = self.transformer(
+            src=src_emb,
+            tgt=tgt_emb,
+            tgt_mask=tgt_mask,
+            src_key_padding_mask=src_pad_mask,
+            tgt_key_padding_mask=tgt_pad_mask,
+            memory_key_padding_mask=src_pad_mask
+        )
+        return self.fc_out(out)
+
+    def beam_search(self, src, tokenizer, beam_width=3, max_gen_len=50):
+        device = src.device
+        self.eval()
+        
+        src_emb = self.pos_encoder(self.embedding(src))
+        memory = self.transformer.encoder(src_emb)
+        
+        # (score, sequence_tensor)
+        beams = [(0.0, torch.tensor([[101]], device=device))] # 101 = [CLS]/[BOS]
+        
+        for _ in range(max_gen_len):
+            new_beams = []
+            for score, seq in beams:
+                if seq[0, -1].item() == 102: # 102 = [SEP]/[EOS]
+                    new_beams.append((score, seq))
+                    continue
+                
+                tgt_emb = self.pos_encoder(self.embedding(seq))
+                tgt_mask = self.transformer.generate_square_subsequent_mask(seq.size(1)).to(device)
+                
+                out = self.transformer.decoder(tgt_emb, memory, tgt_mask=tgt_mask)
+                logits = self.fc_out(out[:, -1, :])
+                log_probs = torch.log_softmax(logits, dim=-1)
+                
+                top_scores, top_indices = torch.topk(log_probs, beam_width)
+                
+                for i in range(beam_width):
+                    new_score = score + top_scores[0, i].item()
+                    new_seq = torch.cat([seq, top_indices[0, i].unsqueeze(0).unsqueeze(0)], dim=1)
+                    new_beams.append((new_score, new_seq))
+            
+            beams = sorted(new_beams, key=lambda x: x[0], reverse=True)[:beam_width]
+            
+            if all(b[1][0, -1].item() == 102 for b in beams):
+                break
+                
+        return beams[0][1]
+
+# --- LIGHTNING MODULE ---
+class SquadLightningModule(pl.LightningModule):
+    def __init__(self, tokenizer):
+        super().__init__()
+        self.model = TransformerModel()
+        self.tokenizer = tokenizer
+        self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
+        self.save_hyperparameters(ignore=['tokenizer'])
+
+    def forward(self, src, tgt):
+        return self.model(src, tgt)
+
+    def training_step(self, batch, batch_idx):
+        src, tgt_in, tgt_out = batch
+        logits = self(src, tgt_in)
+        loss = self.criterion(logits.reshape(-1, VOCAB_SIZE), tgt_out.reshape(-1))
+        
+        # Token Accuracy (Teacher Forcing)
+        preds = torch.argmax(logits, dim=-1)
+        mask = tgt_out != -100
+        correct = (preds == tgt_out) & mask
+        accuracy = correct.sum().float() / mask.sum().float()
+        
+        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_acc", accuracy, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        src, tgt_in, tgt_out = batch
+        logits = self(src, tgt_in)
+        loss = self.criterion(logits.reshape(-1, VOCAB_SIZE), tgt_out.reshape(-1))
+        
+        # 1. Validation Token Accuracy
+        preds_tf = torch.argmax(logits, dim=-1)
+        mask = tgt_out != -100
+        correct = (preds_tf == tgt_out) & mask
+        val_acc = correct.sum().float() / mask.sum().float()
+        
+        # 2. Generative F1 Score (Greedy for speed monitoring, Beam Search is too slow for full val)
+        # On utilise une génération simple pour monitorer la F1
+        total_f1 = 0
+        if batch_idx < 5: # Limit generation to first 5 batches to save time
+            for i in range(min(4, src.size(0))): # Check first 4 samples
+                # Greedy generation manually for speed
+                with torch.no_grad():
+                    gen_seq = self.model.beam_search(src[i].unsqueeze(0), self.tokenizer, beam_width=1, max_gen_len=20)
+                
+                pred_text = self.tokenizer.decode(gen_seq.squeeze(), skip_special_tokens=True)
+                
+                # Reconstruct Truth Text
+                truth_ids = tgt_out[i].cpu().numpy()
+                truth_text = self.tokenizer.decode(truth_ids[truth_ids != -100], skip_special_tokens=True)
+                
+                total_f1 += compute_f1(pred_text, truth_text)
+            
+            avg_f1 = total_f1 / min(4, src.size(0))
+            self.log("val_f1", avg_f1, prog_bar=True)
+
+        self.log("val_loss", loss, prog_bar=True)
+        self.log("val_acc", val_acc, prog_bar=True)
+        return loss
+
+    def configure_optimizers(self):
+        return optim.AdamW(self.parameters(), lr=LEARNING_RATE)
+
+# --- CALLBACKS ---
+class PlottingCallback(Callback):
+    def __init__(self):
+        self.metrics = {"train_loss": [], "val_loss": [], "val_f1": [], "val_acc": []}
+        self.epochs = []
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        m = trainer.callback_metrics
+        
+        # --- FIX: Sécurité anti-crash ---
+        # Pendant le "Sanity Check", train_loss n'existe pas encore.
+        if "train_loss" not in m:
+            return 
+        # --------------------------------
+
+        self.epochs.append(trainer.current_epoch)
+        
+        # On récupère les valeurs proprement
+        self.metrics["train_loss"].append(m["train_loss"].item())
+        self.metrics["val_loss"].append(m.get("val_loss", torch.tensor(0.0)).item())
+        self.metrics["val_acc"].append(m.get("val_acc", torch.tensor(0.0)).item())
+        self.metrics["val_f1"].append(m.get("val_f1", torch.tensor(0.0)).item())
+
+        # Création du graphique
+        try:
+            fig, ax = plt.subplots(1, 3, figsize=(18, 5))
+            
+            # Loss
+            ax[0].plot(self.epochs, self.metrics["train_loss"], label="Train", marker='.')
+            ax[0].plot(self.epochs, self.metrics["val_loss"], label="Val", marker='.')
+            ax[0].set_title("Loss")
+            ax[0].legend()
+            ax[0].grid(True)
+            
+            # Accuracy
+            ax[1].plot(self.epochs, self.metrics["val_acc"], color="green", marker='.')
+            ax[1].set_title("Token Accuracy")
+            ax[1].grid(True)
+            
+            # F1 Score
+            ax[2].plot(self.epochs, self.metrics["val_f1"], color="orange", marker='.')
+            ax[2].set_title("Generative F1 Score")
+            ax[2].grid(True)
+            
+            plt.tight_layout()
+            plt.savefig("monitoring_metrics.png")
+            plt.close()
+        except Exception as e:
+            print(f"Erreur lors du plot: {e}")
+            
+# --- DATASET ---
 class SquadDataset(Dataset):
     def __init__(self, data, tokenizer):
         self.data = data
@@ -41,131 +269,51 @@ class SquadDataset(Dataset):
         try: answer = item['answers']['text'][0]
         except IndexError: answer = ""
         
+        # Format: Question [SEP] Context
         input_text = f"{item['question']} [SEP] {item['context']}"
-        enc_tokens = self.tokenizer(input_text, max_length=MAX_LEN, padding="max_length", truncation=True, return_tensors="pt")
-        ans_tokens = self.tokenizer(answer, max_length=MAX_LEN + 1, padding="max_length", truncation=True, return_tensors="pt")
         
-        src_ids = enc_tokens['input_ids'].squeeze(0)
-        ans_ids = ans_tokens['input_ids'].squeeze(0)
+        enc = self.tokenizer(input_text, max_length=MAX_LEN, padding="max_length", truncation=True, return_tensors="pt")
+        # Target: [CLS] Answer [SEP]
+        ans = self.tokenizer(answer, max_length=50, padding="max_length", truncation=True, return_tensors="pt")
         
-        label = ans_ids[1:].clone()
-        label[label == 0] = -100 
+        src_ids = enc['input_ids'].squeeze(0)
         
-        return src_ids, ans_ids[:-1], label
+        # Shift targets for teacher forcing
+        # tgt_in: [CLS] Answer ...
+        # tgt_out: Answer ... [SEP]
+        full_tgt = ans['input_ids'].squeeze(0)
+        tgt_in = full_tgt[:-1]
+        tgt_out = full_tgt[1:].clone()
+        tgt_out[tgt_out == 0] = -100 # Ignore padding in loss
+        
+        return src_ids, tgt_in, tgt_out
 
-# --- 2. CALLBACK TEXTE (CELUI QUE TU AVAIS DÉJÀ) ---
-class PredictionLogger(Callback):
-    def __init__(self, tokenizer, num_samples=2, log_file="training_logs.txt"):
-        super().__init__()
-        self.tokenizer = tokenizer
-        self.num_samples = num_samples
-        self.log_file = log_file
-        with open(self.log_file, "w", encoding="utf-8") as f:
-            f.write("=== LOGS D'ENTRAÎNEMENT ===\n")
-
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
-        if batch_idx != 0: return
-        src, tgt_in, tgt_out = batch
-        with torch.no_grad():
-            preds = torch.argmax(pl_module(src, tgt_in), dim=-1)
-
-        with open(self.log_file, "a", encoding="utf-8") as f:
-            header = f"\n--- EPOCH {trainer.current_epoch} ---\n"
-            f.write(header)
-            # On affiche aussi dans le terminal pour que tu saches que ça tourne
-            print(f"📝 Ecriture des logs dans {self.log_file}...") 
-            
-            for i in range(min(self.num_samples, src.size(0))):
-                src_txt = self.tokenizer.decode(src[i], skip_special_tokens=True)[:100]
-                truth_ids = tgt_out[i].cpu().numpy()
-                truth_txt = self.tokenizer.decode(truth_ids[truth_ids != -100], skip_special_tokens=True)
-                pred_txt = self.tokenizer.decode(preds[i], skip_special_tokens=True)
-                
-                msg = f"Q: {src_txt}...\nRef: {truth_txt}\nPred: {pred_txt}\n{'-'*20}\n"
-                f.write(msg)
-
-# --- 3. NOUVEAU CALLBACK GRAPHIQUE (POUR L'IMAGE PNG) ---
-class PlottingCallback(Callback):
-    def __init__(self):
-        super().__init__()
-        self.train_loss = []
-        self.val_loss = []
-        self.epochs = []
-
-    def on_validation_epoch_end(self, trainer, pl_module):
-        metrics = trainer.callback_metrics
-        t_loss = metrics.get("train_loss")
-        v_loss = metrics.get("val_loss")
-
-        if t_loss is not None and v_loss is not None:
-            self.train_loss.append(t_loss.item())
-            self.val_loss.append(v_loss.item())
-            self.epochs.append(trainer.current_epoch)
-            
-            plt.figure(figsize=(10, 6))
-            plt.plot(self.epochs, self.train_loss, label="Train Loss", color='blue', marker='o')
-            plt.plot(self.epochs, self.val_loss, label="Val Loss", color='red', linestyle='--', marker='x')
-            plt.title(f"Training Progress - Epoch {trainer.current_epoch}")
-            plt.xlabel("Epochs")
-            plt.ylabel("Loss")
-            plt.legend()
-            plt.grid(True)
-            plt.savefig("courbe_apprentissage.png") # Sauvegarde l'image
-            plt.close()
-
-class SquadLightningModule(pl.LightningModule):
-    def __init__(self):
-        super().__init__()
-        self.model = TransformerModel()
-        self.criterion = nn.CrossEntropyLoss(ignore_index=-100)
-        self.save_hyperparameters()
-
-    def forward(self, src, tgt): return self.model(src, tgt)
-
-    def training_step(self, batch, batch_idx):
-        loss = self.criterion(self(batch[0], batch[1]).reshape(-1, VOCAB_SIZE), batch[2].reshape(-1))
-        self.log("train_loss", loss, on_epoch=True, prog_bar=True)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        loss = self.criterion(self(batch[0], batch[1]).reshape(-1, VOCAB_SIZE), batch[2].reshape(-1))
-        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
-        return loss
-
-    def configure_optimizers(self): return optim.AdamW(self.parameters(), lr=LEARNING_RATE)
-
-# --- 4. LANCEMENT ---
+# --- MAIN ---
 if __name__ == '__main__':
-    train_dl = DataLoader(SquadDataset(ds_train, tokenizer), batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-    val_dl = DataLoader(SquadDataset(ds_val, tokenizer), batch_size=BATCH_SIZE, num_workers=0)
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     
-    logger = CSVLogger("logs_csv", name="squad_history")
-    # ON AJOUTE NOTRE CALLBACK GRAPHIQUE ICI
-    callbacks = [
-        ModelCheckpoint(dirpath="checkpoints", filename="model-{epoch:02d}-{val_loss:.2f}", monitor="val_loss"),
-        LearningRateMonitor(logging_interval='step'),
-        PredictionLogger(tokenizer), # Ton logger texte
-        PlottingCallback()           # Le logger graphique PNG
-    ]
-
-    torch.set_float32_matmul_precision('medium')
-
+    data = load_dataset("rajpurkar/squad", split="train[:5%]+validation[:5%]") # Small subset for demo
+    split = data.train_test_split(test_size=0.1, seed=42)
+    
+    train_dl = DataLoader(SquadDataset(split['train'], tokenizer), batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+    val_dl = DataLoader(SquadDataset(split['test'], tokenizer), batch_size=BATCH_SIZE, num_workers=2)
+    
+    model_module = SquadLightningModule(tokenizer)
+    
+    logger = CSVLogger("logs", name="squad_experiment")
+    
     trainer = pl.Trainer(
         max_epochs=EPOCHS,
-        accelerator="gpu",
+        accelerator="auto",
         devices=1,
-        precision="16-mixed",
-        accumulate_grad_batches=4,
         logger=logger,
-        callbacks=callbacks,
-        log_every_n_steps=10
+        log_every_n_steps=10,
+        callbacks=[
+            ModelCheckpoint(filename="best_model", monitor="val_loss"),
+            LearningRateMonitor(logging_interval='step'),
+            PlottingCallback()
+        ]
     )
-
-    ckpt_path = None
-    list_of_checkpoints = glob.glob('checkpoints/*.ckpt')
-    if list_of_checkpoints:
-        ckpt_path = max(list_of_checkpoints, key=os.path.getctime)
-        print(f"♻️ Reprise depuis : {ckpt_path}")
-
-    print("🚀 Entraînement lancé...")
-    trainer.fit(SquadLightningModule(), train_dl, val_dl, ckpt_path=ckpt_path)
+    
+    print("Training Started...")
+    trainer.fit(model_module, train_dl, val_dl)

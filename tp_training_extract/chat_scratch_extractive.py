@@ -3,7 +3,7 @@ from transformers import AutoTokenizer
 from model_scratch import ExtractiveTransformer, MAX_LEN, VOCAB_SIZE, DEVICE
 
 # Chargement
-MODEL_PATH = "squad_scratch_extractive.pth"
+MODEL_PATH = "squad_scratch_extractive_best.pth"
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
 model = ExtractiveTransformer().to(DEVICE)

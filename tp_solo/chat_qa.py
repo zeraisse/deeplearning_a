@@ -1,114 +1,110 @@
 import torch
 import glob
 import os
+import warnings
 from transformers import AutoTokenizer
-from model import TransformerModel, MAX_LEN
+
+# On importe la classe du modèle et les params depuis ton fichier d'entraînement
+# Assure-toi que le fichier s'appelle bien 'train_qa.py'
+try:
+    from train_qa import TransformerModel, MAX_LEN
+except ImportError:
+    print("❌ Erreur : Impossible d'importer TransformerModel depuis train_qa.py")
+    print("Vérifie que tu es dans le bon dossier.")
+    exit()
 
 # --- CONFIGURATION ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+warnings.filterwarnings("ignore")
 
-# --- 1. RECHERCHE AUTOMATIQUE DU DERNIER CHECKPOINT LIGHTNING ---
-list_of_checkpoints = glob.glob('checkpoints/*.ckpt')
+# --- 1. RECHERCHE AUTOMATIQUE DU DERNIER CHECKPOINT ---
+# On cherche dans le dossier par défaut de Lightning
+list_of_checkpoints = glob.glob('logs/squad_experiment/**/checkpoints/*.ckpt', recursive=True)
+
+# Si vide, on cherche à la racine ou dans le dossier checkpoints simple
+if not list_of_checkpoints:
+    list_of_checkpoints = glob.glob('checkpoints/*.ckpt')
 
 if not list_of_checkpoints:
-    # Fallback sur l'ancien fichier si aucun checkpoint Lightning n'existe
-    MODEL_PATH = "squad_pytorch_model.pth"
-    print("Aucun checkpoint Lightning trouvé, recherche de l'ancien .pth...")
+    print("❌ Aucun checkpoint trouvé (ni dans logs/, ni dans checkpoints/).")
+    print("Lance d'abord : python train_qa.py")
+    exit()
 else:
+    # On prend le fichier le plus récent
     MODEL_PATH = max(list_of_checkpoints, key=os.path.getctime)
-    print(f"Checkpoint Lightning trouvé : {MODEL_PATH}")
+    print(f"📂 Checkpoint trouvé : {MODEL_PATH}")
 
 # --- 2. CHARGEMENT ---
-print("Chargement du Tokenizer...")
+print("⏳ Chargement du Tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
-print(f"Chargement de l'architecture...")
-# Attention : Verifier que NUM_LAYERS dans model.py est bien le même 
-# que celui utilisé pour l'entraînement (16) !
+print(f"🏗️  Chargement de l'architecture...")
 model = TransformerModel().to(DEVICE)
 
-print("Chargement des poids...")
+print("⚖️  Chargement des poids...")
 try:
-    if ".ckpt" in MODEL_PATH:
-        # --- SPÉCIAL LIGHTNING ---
-        checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
-        state_dict = checkpoint['state_dict']
-        
-        # Lightning ajoute un préfixe "model." devant toutes les variables.
-        # Nous devons l'enlever pour que ça rentre dans TransformerModel.
-        new_state_dict = {}
-        for key, value in state_dict.items():
-            if key.startswith("model."):
-                new_key = key.replace("model.", "") # On enlève 'model.'
-                new_state_dict[new_key] = value
-            else:
-                new_state_dict[key] = value
-                
-        model.load_state_dict(new_state_dict)
-        print("Poids Lightning chargés et adaptés avec succès !")
-        
-    else:
-        # --- CLASSIQUE PYTORCH ---
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-        print("Poids standards chargés !")
-
+    # --- CHARGEMENT LIGHTNING ---
+    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+    
+    # Si c'est un checkpoint Lightning, les clés commencent par "model."
+    # Si c'est un save manuel, non. On gère les deux cas.
+    state_dict = checkpoint.get('state_dict', checkpoint)
+    
+    new_state_dict = {}
+    for key, value in state_dict.items():
+        # On nettoie le préfixe "model." ajouté par Lightning
+        if key.startswith("model."):
+            new_key = key.replace("model.", "") 
+            new_state_dict[new_key] = value
+        else:
+            new_state_dict[key] = value
+            
+    model.load_state_dict(new_state_dict)
+    print("✅ Poids chargés avec succès !")
+    
     model.eval()
 
-except FileNotFoundError:
-    print(f"Erreur : Le fichier {MODEL_PATH} est introuvable.")
-    exit()
 except RuntimeError as e:
-    print(f"Erreur d'architecture : {e}")
-    print("Conseil : Vérifie que NUM_LAYERS dans model.py est identique à l'entraînement.")
+    print(f"❌ Erreur d'architecture : {e}")
+    print("Conseil : Vérifie que tes hyperparamètres (EMBED_DIM, LAYERS, etc.) dans train_qa.py sont les mêmes qu'à l'entraînement.")
     exit()
 
-# --- 3. GÉNÉRATION (Inchangée, ta logique était bonne) ---
+# --- 3. GÉNÉRATION (Via Beam Search) ---
 def generate_answer(question, context):
+    # Préparation
     input_text = f"{question} [SEP] {context}"
     enc_tokens = tokenizer(input_text, max_length=MAX_LEN, padding="max_length", truncation=True, return_tensors="pt")
-    src = enc_tokens['input_ids'].to(DEVICE)
     
-    # On commence la réponse par [CLS] (101)
-    tgt_input = torch.tensor([[101]], device=DEVICE)
+    # Ajout de la dimension de batch (unsqueeze) car le modèle attend [Batch, Seq]
+    src = enc_tokens['input_ids'].to(DEVICE)
 
     with torch.no_grad():
-        for _ in range(MAX_LEN):
-            # Le modèle gère les masques en interne via model.py
-            output = model(src, tgt_input)
-            
-            # On regarde le dernier token prédit
-            next_token_logits = output[:, -1, :] 
-            next_token_id = next_token_logits.argmax(dim=-1).unsqueeze(0)
-            
-            # Si c'est [SEP] (102), on arrête
-            if next_token_id.item() == 102:
-                break
-            
-            # Sinon on l'ajoute à la suite et on recommence
-            tgt_input = torch.cat([tgt_input, next_token_id], dim=1)
+        # Appel direct à la fonction beam_search de ton modèle
+        # Elle gère déjà le [CLS] de départ et la boucle
+        generated_ids = model.beam_search(src, tokenizer, beam_width=3, max_gen_len=30)
 
-    generated_ids = tgt_input[0, 1:] # On ignore le [CLS] de départ
-    return tokenizer.decode(generated_ids, skip_special_tokens=True)
+    # Décodage
+    return tokenizer.decode(generated_ids.squeeze(), skip_special_tokens=True)
 
 # --- 4. INTERFACE ---
 print("\n" + "="*50)
-print("🤖 ORACLE SQuAD (16 Layers)")
+print(f"🤖 ORACLE SQuAD (Génératif)")
 print("="*50)
 
 while True:
-    print("\n--- NOUVEAU CONTEXTE ---")
-    context = input("📜 Texte : ")
+    print("\n--- 📝 NOUVEAU CONTEXTE ---")
+    context = input("Texte : ")
     if not context.strip(): continue
-    if context.lower() in ['exit', 'quit']: break
+    if context.lower() in ['exit', 'quit', 'q']: break
     
     while True:
-        question = input("\n❓ Question : ")
+        question = input("\n❓ Question (ou 'new' pour changer de texte) : ")
         if question.lower() == 'new': break
-        if question.lower() in ['exit', 'quit']: exit()
+        if question.lower() in ['exit', 'quit', 'q']: exit()
         
         try:
             print("🤔 Réflexion...")
             reponse = generate_answer(question, context)
-            print(f"💡 Réponse : {reponse}")
+            print(f"💡 Réponse : \033[1m{reponse}\033[0m") # En gras
         except Exception as e:
-            print(f"❌ Erreur : {e}")
+            print(f"❌ Erreur lors de la génération : {e}")

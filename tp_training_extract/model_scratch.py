@@ -41,7 +41,7 @@ class ExtractiveTransformer(nn.Module):
             d_model=EMBED_DIM, 
             nhead=NUM_HEADS, 
             dim_feedforward=FF_DIM, 
-            dropout=0.3, # <--- AUGMENTE ÇA (C'est le frein)
+            dropout=DROPOUT, 
             batch_first=True
         )
         
