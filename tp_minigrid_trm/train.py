@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
-from MiniGridEnv import gridEnv, get_expert_action # <-- Import mis à jour
+from gridEnv import gridEnv, get_expert_action
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -32,7 +32,7 @@ class TransformerAgent(nn.Module):
         return self.head(z_summary) # Prédiction
 
 def generate_dataset(episodes=500):
-    print("🤖 Génération des données via l'Expert...")
+    print("Génération des données d'entraînement...")
     env = gridEnv(size=6, render_mode="rgb_array") # <-- Utilisation de gridEnv
     X_data, y_data = [], []
 
@@ -61,7 +61,7 @@ def train_model(dataset, epochs=5):
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     criterion = nn.CrossEntropyLoss()
 
-    print(f"🔥 Démarrage de l'entraînement sur {DEVICE}...")
+    print(f"Démarrage de l'entraînement sur {DEVICE}...")
     model.train()
     
     for epoch in range(epochs):

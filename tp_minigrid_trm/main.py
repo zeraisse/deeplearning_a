@@ -1,11 +1,10 @@
 import torch
 import numpy as np
-from MiniGridEnv import gridEnv # <-- Import mis à jour
+from gridEnv import gridEnv
 from train import generate_dataset, train_model, DEVICE
 
 def visual_test(model):
-    print("\n--- 🎥 TEST VISUEL ---")
-    test_env = gridEnv(size=6, render_mode="human") # <-- Utilisation de gridEnv
+    test_env = gridEnv(size=6, render_mode="human")
     model.eval()
 
     for i in range(3): 
@@ -27,7 +26,7 @@ def visual_test(model):
             done = terminated or truncated
             
             if terminated and reward > 0:
-                print("✅ VICTOIRE !")
+                print("VICTOIRE !")
                 
     test_env.close()
 
