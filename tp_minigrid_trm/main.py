@@ -1,21 +1,27 @@
 import torch
 import numpy as np
 import imageio
-from gridEnv import gridEnv
+from gridEnv import gridEnv, GRID_SIZE
 from train import generate_dataset, train_model, DEVICE
 
-def generate_video(model, filename="trm_result.mp4"):
+# --- HYPERPARAMETERS VIDEO ---
+VIDEO_FILENAME = "trm_result.mp4"
+VIDEO_FPS = 5
+MAX_VIDEO_STEPS = 60
+
+def generate_video(model, filename=VIDEO_FILENAME):
     print(f"Generating video to {filename}...")
-    env = gridEnv(size=6, render_mode="rgb_array")
-    writer = imageio.get_writer(filename, fps=5)
+    env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
+    writer = imageio.get_writer(filename, fps=VIDEO_FPS)
     
     obs, _ = env.reset()
     done = False
     
+    # Première frame
     writer.append_data(env.render())
     
     step_count = 0
-    while not done and step_count < 50:
+    while not done and step_count < MAX_VIDEO_STEPS:
         img = obs['image'].astype(np.float32) / 255.0
         img_tensor = torch.tensor(img).unsqueeze(0).to(DEVICE)
         
@@ -30,19 +36,19 @@ def generate_video(model, filename="trm_result.mp4"):
         step_count += 1
         
         if terminated and reward > 0:
-            print("Victory in video!")
+            print("VICTORY detected in video generation!")
 
     writer.close()
     env.close()
-    print("Video saved.")
+    print("Video generation complete.")
 
 if __name__ == "__main__":
-    # 1. Dataset
-    dataset = generate_dataset(episodes=600)
+    # 1. Dataset (utilise EPISODES de train.py par défaut)
+    dataset = generate_dataset()
     
-    # 2. Train TRM
-    model = train_model(dataset, epochs=5)
+    # 2. Entraînement (utilise EPOCHS de train.py par défaut)
+    model = train_model(dataset)
     
-    # 3. Video
+    # 3. Génération Vidéo
     model.eval()
     generate_video(model)
