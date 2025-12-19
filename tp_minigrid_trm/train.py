@@ -15,7 +15,8 @@ from gridEnv import gridEnv, get_expert_action
 from config import (
     DEVICE, INPUT_DIM, D_MODEL, NUM_HEADS, NUM_ACTIONS, 
     SEQ_LEN, N_STEPS, BATCH_SIZE, LEARNING_RATE, EPOCHS, EPISODES,
-    GRID_SIZE, CHECKPOINT_FILE, BEST_MODEL_FILE, RESUME_TRAINING, MAX_STEPS
+    GRID_SIZE, CHECKPOINT_FILE, BEST_MODEL_FILE, RESUME_TRAINING, MAX_STEPS,
+    DATASET_FILE, FORCE_NEW_DATASET
 )
 
 class TRMBlock(nn.Module):
@@ -73,24 +74,32 @@ class TRMAgent(nn.Module):
 
 
 def generate_dataset(episodes=EPISODES):
-    print(f"Generation dataset ({episodes} episodes) avec HUD VISUEL...")
+    # 1. EST-CE QUE LE FICHIER EXISTE DEJA ?
+    if os.path.exists(DATASET_FILE) and not FORCE_NEW_DATASET:
+        print(f"Dataset trouvé : '{DATASET_FILE}'. Chargement immédiat...")
+        # On charge le fichier (weights_only=False pour éviter l'erreur de sécurité)
+        try:
+            return torch.load(DATASET_FILE, weights_only=False)
+        except Exception as e:
+            print(f"Erreur chargement ({e}). On régénère tout.")
+
+    # 2. SINON, ON LE GENERE
+    print(f"Génération du dataset ({episodes} épisodes)... Cela peut prendre du temps.")
     env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
     X_data, y_data = [], []
 
-    for _ in tqdm(range(episodes), desc="Episodes"):
+    for _ in tqdm(range(episodes), desc="Simulation"):
         obs, _ = env.reset()
         done = False
         steps = 0
-        while not done and steps < MAX_STEPS: # Utilise MAX_STEPS du config
+        while not done and steps < MAX_STEPS:
             action = get_expert_action(env)
             
-            # --- PREPARATION IMAGE AVEC HUD ---
+            # --- HUD LOGIC (Pixel Blanc) ---
             img = obs['image'].astype(np.float32) / 255.0
-            
-            # SI ON PORTE LA CLE : On allume le pixel (0,0) en BLANC
             if env.unwrapped.carrying:
                 img[0, 0, :] = 1.0 
-            # ----------------------------------
+            # -------------------------------
 
             X_data.append(img)
             y_data.append(action)
@@ -98,10 +107,18 @@ def generate_dataset(episodes=EPISODES):
             done = terminated or truncated
             steps += 1
 
+    # Conversion Tensor
     X_tensor = torch.tensor(np.array(X_data))
     y_tensor = torch.tensor(np.array(y_data), dtype=torch.long)
-    print(f"Dataset generated: {len(X_data)} frames")
-    return TensorDataset(X_tensor, y_tensor)
+    dataset = TensorDataset(X_tensor, y_tensor)
+    
+    print(f"Génération terminée ({len(X_data)} images).")
+    
+    # 3. ON SAUVEGARDE POUR LA PROCHAINE FOIS !
+    print(f"Sauvegarde dans '{DATASET_FILE}'...")
+    torch.save(dataset, DATASET_FILE)
+    
+    return dataset
 
 def plot_metrics(history):
     epochs_range = range(1, len(history['loss']) + 1)
@@ -137,7 +154,7 @@ def train_model(dataset, epochs=EPOCHS):
 
     # --- 1. CHARGEMENT DU BACKUP (Si demandé et si existe) ---
     if RESUME_TRAINING and os.path.exists(CHECKPOINT_FILE):
-        print(f"🔄 Checkpoint trouvé : '{CHECKPOINT_FILE}'. Reprise de l'entraînement...")
+        print(f"Checkpoint trouvé : '{CHECKPOINT_FILE}'. Reprise de l'entraînement...")
         checkpoint = torch.load(CHECKPOINT_FILE, weights_only=False)  
 
         # On recharge tout
@@ -149,7 +166,7 @@ def train_model(dataset, epochs=EPOCHS):
         
         print(f"   -> Reprise à l'époque {start_epoch + 1}/{epochs}. Best F1 actuel: {best_f1:.4f}")
     else:
-        print("🚀 Nouvel entraînement démarré.")
+        print("Nouvel entraînement démarré.")
 
     model.train()
     
@@ -165,6 +182,10 @@ def train_model(dataset, epochs=EPOCHS):
             outputs = model(imgs)
             loss = criterion(outputs, labels)
             loss.backward()
+            # --- GRADIENT CLIPPING ---
+            # coupe tout mouvement trop violent (> 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # ------
             optimizer.step()
             
             total_loss += loss.item()

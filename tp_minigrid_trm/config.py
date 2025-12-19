@@ -23,7 +23,7 @@ SEQ_LEN = 49
 N_STEPS = 4         
 
 BATCH_SIZE = 1024   # On garde la puissance de la 5070 Ti
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.0001
 EPOCHS = 300        # Suffisant avec le HUD
 EPISODES = 10000    # Dataset massif pour couvrir les pièges de lave
 
@@ -36,3 +36,9 @@ MAX_VIDEO_STEPS = 1000
 CHECKPOINT_FILE = "checkpoint_last.pth"
 BEST_MODEL_FILE = "best_model_weights.pth"
 RESUME_TRAINING = False # <--- ON REPART A ZERO PROPREMENT
+
+# ==============================================================================
+# CONFIG DATASET
+# ==============================================================================
+DATASET_FILE = "dataset_14x14_hud.pt"  # Le fichier qui contiendra tes 10k épisodes
+FORCE_NEW_DATASET = False              # Mets True si tu veux forcer la régénération
