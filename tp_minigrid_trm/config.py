@@ -24,7 +24,7 @@ N_STEPS = 4
 
 BATCH_SIZE = 1024   # On garde la puissance de la 5070 Ti
 LEARNING_RATE = 0.001
-EPOCHS = 200        # Suffisant avec le HUD
+EPOCHS = 300        # Suffisant avec le HUD
 EPISODES = 25000    # Dataset massif pour couvrir les pièges de lave
 
 # ==============================================================================
