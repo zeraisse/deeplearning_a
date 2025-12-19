@@ -8,6 +8,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from gridEnv import gridEnv, get_expert_action
 
@@ -76,7 +77,7 @@ def generate_dataset(episodes=EPISODES):
     env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
     X_data, y_data = [], []
 
-    for _ in range(episodes):
+    for _ in tqdm(range(episodes), desc="Episodes"):
         obs, _ = env.reset()
         done = False
         steps = 0
