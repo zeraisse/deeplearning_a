@@ -7,37 +7,41 @@ from train import generate_dataset, train_model, DEVICE
 from config import VIDEO_FILENAME, VIDEO_FPS, MAX_VIDEO_STEPS, GRID_SIZE, DEVICE
 
 def generate_video(model, filename=VIDEO_FILENAME):
-    print(f"Generating video to {filename}...")
+    print(f"Generating video...")
     env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
     writer = imageio.get_writer(filename, fps=VIDEO_FPS)
     
     obs, _ = env.reset()
     done = False
     
-    # Première frame
-    writer.append_data(env.render())
+    # 1ère frame
+    frame = env.render()
+    writer.append_data(frame)
     
     step_count = 0
     while not done and step_count < MAX_VIDEO_STEPS:
+        # --- HUD LOGIC ---
         img = obs['image'].astype(np.float32) / 255.0
+        if env.unwrapped.carrying:
+            img[0, 0, :] = 1.0 
+        # -----------------
+
         img_tensor = torch.tensor(img).unsqueeze(0).to(DEVICE)
         
         with torch.no_grad():
             logits = model(img_tensor)
             action = torch.argmax(logits).item()
             
-        obs, reward, terminated, truncated, _ = env.step(action)
+        obs, _, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
         
-        writer.append_data(env.render())
+        frame = env.render()
+        writer.append_data(frame)
         step_count += 1
-        
-        if terminated and reward > 0:
-            print("VICTORY detected in video generation!")
 
     writer.close()
     env.close()
-    print("Video generation complete.")
+    print(f"Video saved to {filename}")
 
 if __name__ == "__main__":
     # 1. Dataset (utilise EPISODES de train.py par défaut)

@@ -14,7 +14,7 @@ from gridEnv import gridEnv, get_expert_action
 from config import (
     DEVICE, INPUT_DIM, D_MODEL, NUM_HEADS, NUM_ACTIONS, 
     SEQ_LEN, N_STEPS, BATCH_SIZE, LEARNING_RATE, EPOCHS, EPISODES,
-    GRID_SIZE, CHECKPOINT_FILE, BEST_MODEL_FILE, RESUME_TRAINING
+    GRID_SIZE, CHECKPOINT_FILE, BEST_MODEL_FILE, RESUME_TRAINING, MAX_STEPS
 )
 
 class TRMBlock(nn.Module):
@@ -70,8 +70,9 @@ class TRMAgent(nn.Module):
         y_summary = y.mean(dim=1)
         return self.head(y_summary)
 
+
 def generate_dataset(episodes=EPISODES):
-    print(f"Generation dataset LockedRoom ({episodes} episodes)...")
+    print(f"Generation dataset ({episodes} episodes) avec HUD VISUEL...")
     env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
     X_data, y_data = [], []
 
@@ -79,9 +80,17 @@ def generate_dataset(episodes=EPISODES):
         obs, _ = env.reset()
         done = False
         steps = 0
-        while not done and steps < 200:
+        while not done and steps < MAX_STEPS: # Utilise MAX_STEPS du config
             action = get_expert_action(env)
+            
+            # --- PREPARATION IMAGE AVEC HUD ---
             img = obs['image'].astype(np.float32) / 255.0
+            
+            # SI ON PORTE LA CLE : On allume le pixel (0,0) en BLANC
+            if env.unwrapped.carrying:
+                img[0, 0, :] = 1.0 
+            # ----------------------------------
+
             X_data.append(img)
             y_data.append(action)
             obs, _, terminated, truncated, _ = env.step(action)
