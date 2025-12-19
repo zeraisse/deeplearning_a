@@ -13,7 +13,7 @@ DIR_TO_VEC = [
 ]
 
 GRID_SIZE = 12      # <--- 12x12 : C'est grand !
-MAX_STEPS = 400     # Plus de temps nécessaire
+MAX_STEPS = 800     # Plus de temps nécessaire
 
 # ==============================================================================
 # HYPERPARAMETERS POUR train.py
@@ -27,7 +27,7 @@ N_STEPS = 4         # 4 cycles de réflexion
 
 BATCH_SIZE = 1024
 LEARNING_RATE = 0.001
-EPOCHS = 150         # Il faut du temps pour converger
+EPOCHS = 300         # Il faut du temps pour converger
 EPISODES = 20000     # Il faut BEAUCOUP d'exemples pour que l'expert montre comment éviter la lave
 
 # ==============================================================================
@@ -35,7 +35,7 @@ EPISODES = 20000     # Il faut BEAUCOUP d'exemples pour que l'expert montre comm
 # ==============================================================================
 VIDEO_FILENAME = "trm_lava_result.mp4"
 VIDEO_FPS = 10      # Rapide
-MAX_VIDEO_STEPS = 200
+MAX_VIDEO_STEPS = 1000
 
 # ==============================================================================
 # PARAMETRES SAUVEGARDE (CHECKPOINT)

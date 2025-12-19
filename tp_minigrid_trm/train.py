@@ -128,8 +128,8 @@ def train_model(dataset, epochs=EPOCHS):
     # --- 1. CHARGEMENT DU BACKUP (Si demandé et si existe) ---
     if RESUME_TRAINING and os.path.exists(CHECKPOINT_FILE):
         print(f"🔄 Checkpoint trouvé : '{CHECKPOINT_FILE}'. Reprise de l'entraînement...")
-        checkpoint = torch.load(CHECKPOINT_FILE)
-        
+        checkpoint = torch.load(CHECKPOINT_FILE, weights_only=False)  
+
         # On recharge tout
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -192,6 +192,6 @@ def train_model(dataset, epochs=EPOCHS):
     # A la fin, on charge les poids du MEILLEUR modèle (pas forcément le dernier) pour la vidéo
     if os.path.exists(BEST_MODEL_FILE):
         print("Chargement du meilleur modèle pour l'évaluation...")
-        model.load_state_dict(torch.load(BEST_MODEL_FILE))
+        model.load_state_dict(torch.load(BEST_MODEL_FILE, weights_only=False))
         
     return model
