@@ -3,12 +3,13 @@ import numpy as np
 import imageio
 from gridEnv import gridEnv, GRID_SIZE
 from train import generate_dataset, train_model, DEVICE
+from minigrid.wrappers import FullyObsWrapper
 
 from config import VIDEO_FILENAME, VIDEO_FPS, MAX_VIDEO_STEPS, GRID_SIZE, DEVICE
 
 def generate_video(model, filename=VIDEO_FILENAME):
     print(f"Generating video...")
-    env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
+    env = FullyObsWrapper(gridEnv(size=GRID_SIZE, render_mode="rgb_array"))
     writer = imageio.get_writer(filename, fps=VIDEO_FPS)
     
     obs, _ = env.reset()

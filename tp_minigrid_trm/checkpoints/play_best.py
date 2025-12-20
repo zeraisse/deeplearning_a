@@ -17,6 +17,7 @@ from config import (
     # On va utiliser le fichier local au sous-dossier.
     BEST_MODEL_FILE 
 )
+from minigrid.wrappers import FullyObsWrapper
 
 # On force le chemin du modèle pour qu'il cherche dans le dossier COURANT (le sous-dossier)
 # et pas à la racine, puisque tu as dit que le modèle était avec le script.
@@ -27,7 +28,7 @@ def run_demo():
     print(f"🎬 Chargement du champion depuis : {LOCAL_MODEL_PATH}")
     
     # 1. Charger l'environnement
-    env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
+    env = FullyObsWrapper(gridEnv(size=GRID_SIZE, render_mode="rgb_array"))
     
     # 2. Charger le modèle
     model = TRMAgent().to(DEVICE)

@@ -1,4 +1,5 @@
 import os
+import minigrid
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,6 +10,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from minigrid.wrappers import FullyObsWrapper
 
 from gridEnv import gridEnv, get_expert_action
 
@@ -85,7 +87,7 @@ def generate_dataset(episodes=EPISODES):
 
     # 2. SINON, ON LE GENERE
     print(f"Génération du dataset ({episodes} épisodes)... Cela peut prendre du temps.")
-    env = gridEnv(size=GRID_SIZE, render_mode="rgb_array")
+    env = FullyObsWrapper(gridEnv(size=GRID_SIZE, render_mode="rgb_array"))
     X_data, y_data = [], []
 
     for _ in tqdm(range(episodes), desc="Simulation"):
@@ -138,91 +140,61 @@ def plot_metrics(history):
     plt.tight_layout()
     plt.savefig('training_metrics.png')
     plt.close()
-
 def train_model(dataset, epochs=EPOCHS):
-    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+    print("🚀 Optimisation RTX 5070 Ti : Chargement VRAM (Version Stable 10x10)")
+    
+    # --- 1. FORCE VRAM ---
+    # Avec GRID_SIZE=10, ça passe large !
+    inputs, targets = dataset.tensors
+    inputs = inputs.to(DEVICE)
+    targets = targets.to(DEVICE)
+    
+    gpu_dataset = TensorDataset(inputs, targets)
+    # num_workers=0 obligatoire une fois sur GPU
+    loader = DataLoader(gpu_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+    
+    print("✅ Données chargées sur le GPU.")
+
     model = TRMAgent().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    criterion = nn.CrossEntropyLoss()
+    weights = torch.tensor([1.0, 1.0, 0.3, 10.0, 1.0, 10.0, 1.0]).to(DEVICE)
+    print("⚖️ Activation des poids correctifs : Punition x10 sur les oublis de clé/porte !")
+    criterion = nn.CrossEntropyLoss(weight=weights)
 
-    print(f"Start TRM Training on {DEVICE} | Actions={NUM_ACTIONS}")
+    print(f"Start TRM Training on {DEVICE}")
     
-    # Variables d'état
-    start_epoch = 0
-    best_f1 = 0.0
-    history = {'loss': [], 'acc': [], 'f1': []}
-
-    # --- 1. CHARGEMENT DU BACKUP (Si demandé et si existe) ---
-    if RESUME_TRAINING and os.path.exists(CHECKPOINT_FILE):
-        print(f"Checkpoint trouvé : '{CHECKPOINT_FILE}'. Reprise de l'entraînement...")
-        checkpoint = torch.load(CHECKPOINT_FILE, weights_only=False)  
-
-        # On recharge tout
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint['epoch'] + 1 # On reprend à l'époque suivante
-        best_f1 = checkpoint['best_f1']
-        history = checkpoint['history']
-        
-        print(f"   -> Reprise à l'époque {start_epoch + 1}/{epochs}. Best F1 actuel: {best_f1:.4f}")
-    else:
-        print("Nouvel entraînement démarré.")
+    best_loss = float('inf') 
+    history = {'loss': []}
 
     model.train()
     
-    # --- 2. BOUCLE D'ENTRAINEMENT ---
-    for epoch in range(start_epoch, epochs):
+    for epoch in range(epochs):
         total_loss = 0
-        all_preds, all_labels = [], []
+        loop = tqdm(loader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
         
-        for imgs, labels in loader:
-            imgs, labels = imgs.to(DEVICE), labels.to(DEVICE)
+        for imgs, labels in loop:
+            # Pas de .to(DEVICE), c'est déjà dessus !
             optimizer.zero_grad()
-            
             outputs = model(imgs)
             loss = criterion(outputs, labels)
             loss.backward()
-            # --- GRADIENT CLIPPING ---
-            # coupe tout mouvement trop violent (> 1.0)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            # ------
             optimizer.step()
             
             total_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+            loop.set_postfix(loss=loss.item())
             
         epoch_loss = total_loss / len(loader)
-        epoch_acc = 100 * np.mean(np.array(all_preds) == np.array(all_labels))
-        epoch_f1 = f1_score(all_labels, all_preds, average='weighted')
-        
         history['loss'].append(epoch_loss)
-        history['acc'].append(epoch_acc)
-        history['f1'].append(epoch_f1)
         
-        print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss:.4f} | Acc: {epoch_acc:.2f}% | F1: {epoch_f1:.4f}")
+        # Un print simple pour voir que ça avance
+        print(f"Epoch {epoch+1}/{epochs} | Loss: {epoch_loss:.4f}")
         
-        # --- 3. SAUVEGARDE DU CHECKPOINT (Systématique) ---
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'best_f1': best_f1,
-            'history': history
-        }, CHECKPOINT_FILE)
+        # Sauvegarde
+        torch.save({'epoch': epoch, 'model': model.state_dict(), 'history': history}, CHECKPOINT_FILE)
         
-        # --- 4. SAUVEGARDE DU MEILLEUR MODELE (Conditionnelle) ---
-        if epoch_f1 > best_f1:
-            best_f1 = epoch_f1
+        if epoch_loss < best_loss:
+            best_loss = epoch_loss
             torch.save(model.state_dict(), BEST_MODEL_FILE)
-            print(f"   ★ Nouveau Record F1 ! Modèle sauvegardé dans '{BEST_MODEL_FILE}'")
-        
-    plot_metrics(history)
-    
-    # A la fin, on charge les poids du MEILLEUR modèle (pas forcément le dernier) pour la vidéo
-    if os.path.exists(BEST_MODEL_FILE):
-        print("Chargement du meilleur modèle pour l'évaluation...")
-        model.load_state_dict(torch.load(BEST_MODEL_FILE, weights_only=False))
+            print(f"   ★ Record Loss ! ({best_loss:.4f})")
         
     return model
